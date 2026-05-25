@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import sys
 import pandas as pd
 import streamlit as st
+import yfinance as yf
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from analysis.supabase_client import SupabaseClient
@@ -100,11 +101,38 @@ def compute_portfolio(tx_df: pd.DataFrame) -> pd.DataFrame:
                 "Symbol": sym,
                 "Company": h["Company"],
                 "Shares": round(h["Shares"], 4),
-                "Avg Cost (EUR)": round(avg_cost, 4),
-                "Total Cost (EUR)": round(h["Total Cost (EUR)"], 2),
+                "Avg Cost (USD)": round(avg_cost, 4),
+                "Total Cost (USD)": round(h["Total Cost (EUR)"], 2),
             })
 
     return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+
+@st.cache_data(ttl=300)
+def fetch_live_prices(symbols: tuple) -> dict:
+    """Fetches current USD prices via yfinance. Cached 5 minutes."""
+    if not symbols:
+        return {}
+    try:
+        tickers = list(symbols)
+        if len(tickers) == 1:
+            data = yf.download(tickers[0], period="2d", progress=False, auto_adjust=True)
+            close = data["Close"].dropna()
+            price = float(close.iloc[-1]) if not close.empty else None
+            return {tickers[0]: round(price, 4) if price else None}
+        else:
+            data = yf.download(tickers, period="2d", progress=False, auto_adjust=True)
+            close = data["Close"]
+            result = {}
+            for sym in tickers:
+                try:
+                    col = close[sym].dropna()
+                    result[sym] = round(float(col.iloc[-1]), 4) if not col.empty else None
+                except Exception:
+                    result[sym] = None
+            return result
+    except Exception:
+        return {sym: None for sym in symbols}
 
 
 # ── Sidebar navigation ───────────────────────────────────────────────────────
@@ -131,16 +159,64 @@ if page == "Portfolio":
     if portfolio.empty:
         st.info("No positions yet. Use 'Log Trade' to add your first trade.")
     else:
-        st.subheader("Current Holdings")
-        st.dataframe(portfolio, use_container_width=True, hide_index=True)
+        # Fetch live prices and enrich portfolio table
+        live_prices = fetch_live_prices(tuple(portfolio["Symbol"].tolist()))
 
-        total_invested = portfolio["Total Cost (EUR)"].sum()
+        display = portfolio.copy()
+        display["Price Now (USD)"] = display["Symbol"].map(
+            lambda s: f"${live_prices.get(s):,.2f}" if live_prices.get(s) else "N/A"
+        )
+        display["Value (USD)"] = display.apply(
+            lambda r: round(r["Shares"] * live_prices.get(r["Symbol"]), 2)
+            if live_prices.get(r["Symbol"]) else None,
+            axis=1,
+        )
+        display["P&L (USD)"] = display.apply(
+            lambda r: round(r["Value (USD)"] - r["Total Cost (USD)"], 2)
+            if r["Value (USD)"] is not None else None,
+            axis=1,
+        )
+        display["P&L %"] = display.apply(
+            lambda r: round((r["P&L (USD)"] / r["Total Cost (USD)"]) * 100, 2)
+            if r["P&L (USD)"] is not None and r["Total Cost (USD)"] > 0 else None,
+            axis=1,
+        )
+
+        total_invested = portfolio["Total Cost (USD)"].sum()
+        total_value = sum(
+            row["Shares"] * live_prices.get(row["Symbol"])
+            for _, row in portfolio.iterrows()
+            if live_prices.get(row["Symbol"])
+        )
+        total_pnl = total_value - total_invested if total_value else None
+
         col1, col2, col3 = st.columns(3)
-        col1.metric("Total Invested", f"{total_invested:,.2f} EUR")
-        col2.metric("Positions", len(portfolio))
-        col3.metric("Largest position", portfolio.sort_values("Total Cost (EUR)", ascending=False).iloc[0]["Symbol"])
+        col1.metric("Total Invested", f"${total_invested:,.2f}")
+        if total_pnl is not None:
+            col2.metric("Current Value", f"${total_value:,.2f}",
+                        delta=f"${total_pnl:+,.2f} ({(total_pnl/total_invested*100):+.2f}%)")
+        else:
+            col2.metric("Current Value", "N/A")
+        col3.metric("Positions", len(portfolio))
 
-        # Sector concentration warning
+        # Format for display
+        for col in ["Value (USD)", "P&L (USD)"]:
+            display[col] = display[col].apply(
+                lambda v: f"${v:,.2f}" if v is not None else "N/A"
+            )
+        display["P&L %"] = display["P&L %"].apply(
+            lambda v: f"{v:+.2f}%" if v is not None else "N/A"
+        )
+        display["Avg Cost (USD)"] = display["Avg Cost (USD)"].apply(lambda v: f"${v:,.4f}")
+        display["Total Cost (USD)"] = display["Total Cost (USD)"].apply(lambda v: f"${v:,.2f}")
+
+        st.subheader("Current Holdings")
+        st.dataframe(
+            display[["Symbol", "Company", "Shares", "Avg Cost (USD)", "Total Cost (USD)",
+                      "Price Now (USD)", "Value (USD)", "P&L (USD)", "P&L %"]],
+            use_container_width=True, hide_index=True,
+        )
+
         if len(portfolio) == 1:
             st.warning(
                 "⚠️ Portfolio is 100% concentrated in one stock. "
