@@ -112,13 +112,15 @@ def save_recommendations_to_supabase(recommendations: list[dict]) -> None:
     client = get_supabase()
     if not client:
         return
-    try:
-        now = datetime.now(timezone.utc).isoformat()
-        for rec in recommendations:
-            action = rec.get("action", "NO_ACTION")
-            if action in ("NO_ACTION", "WAIT"):
-                continue
+    now = datetime.now(timezone.utc).isoformat()
+    for rec in recommendations:
+        action = rec.get("action", "NO_ACTION")
+        if action in ("NO_ACTION", "WAIT"):
+            continue
 
+        ticker = rec.get("ticker", "?")
+
+        try:
             watchlist_row = {
                 "symbol": rec.get("ticker", ""),
                 "company_name": rec.get("company_name", ""),
@@ -136,7 +138,10 @@ def save_recommendations_to_supabase(recommendations: list[dict]) -> None:
                 "status": "ACTIVE",
             }
             client.table("watchlist").insert(watchlist_row).execute()
+        except Exception as exc:
+            print(f"[run_weekly] Watchlist insert failed for {ticker}: {exc}")
 
+        try:
             ev = rec.get("evidence_table", {})
             price_str = ev.get("current_price", "0")
             try:
@@ -158,9 +163,8 @@ def save_recommendations_to_supabase(recommendations: list[dict]) -> None:
                 "outcome_180d": "pending",
             }
             client.table("decisions").insert(decision_row).execute()
-
-    except Exception as exc:
-        print(f"[run_weekly] Error saving to Supabase: {exc}")
+        except Exception as exc:
+            print(f"[run_weekly] Decisions insert failed for {ticker}: {exc}")
 
 
 def save_newsletter_to_supabase(subject: str, content: dict, email_type: str = "WEEKLY") -> None:
