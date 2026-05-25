@@ -85,7 +85,7 @@ def get_portfolio_from_supabase() -> tuple[list[dict], str]:
                 "symbol": sym,
                 "company_name": h["company_name"],
                 "shares": h["shares"],
-                "avg_cost": f"{avg_cost:.2f} {h['currency']}",
+                "avg_cost": f"${avg_cost:.2f}",
                 "current_price": "N/A",
                 "pnl_pct": "N/A",
             })

@@ -34,9 +34,14 @@ OSNOVNA FILOZOFIJA:
 - Kongresne kupnje/prodaje su slabi signali — samo izvor ideja (prijave kasne 30-45 dana)
 - VAŽNO: Ako ulagač ima osobnu tezu za postojeću poziciju (geopolitika, sektorski trendovi), POŠTUJ tu tezu — ne preporučuj SELL bez iznimno jakog razloga
 
+VALUTA PRAVILO:
+- BUY ZONE i TARGET PRICE uvijek u USD s $ znakom (npr. "< $25.00") jer su sve dionice NYSE/NASDAQ listed i kotiraju u USD
+- Position size je u EUR (tvoj investicijski budžet): small (50-80 EUR), normal (100-150 EUR), full (200-300 EUR)
+- NIKAD ne koristiti EUR za buy_zone ili target_price
+
 STROGA PRAVILA:
 1. Preporučuj samo dionice dostupne na Revolut platformi
-2. Preporučuj BUY_BELOW samo s konkretnom cijenom, nikad otvoreni "kupi odmah"
+2. Preporučuj BUY_BELOW samo s konkretnom cijenom u USD, nikad otvoreni "kupi odmah"
 3. Ako je confidence < 6, output mora biti WAIT ili WATCHLIST
 4. Maksimalno 4-7 akcija po newsletteru
 5. Poslovni model mora biti objašnjiv u 2-3 rečenice
@@ -221,13 +226,26 @@ def generate_weekly_summary(
     """
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
+    slim_recs = [
+        {
+            "ticker": r.get("ticker"),
+            "action": r.get("action"),
+            "confidence": r.get("confidence"),
+            "buy_zone": r.get("buy_zone"),
+            "target_price": r.get("target_price"),
+            "category": r.get("category"),
+            "is_hidden_gem": r.get("is_hidden_gem", False),
+        }
+        for r in all_recommendations
+    ]
+
     prompt = f"""Na temelju individualnih analiza dionica, napravi sažetak tjednog newslettera NA HRVATSKOM JEZIKU.
 
 DATUM: {current_date}
 PORTFELJ: {portfolio_context}
 
 INDIVIDUALNE ANALIZE:
-{json.dumps(all_recommendations, indent=2, default=str)}
+{json.dumps(slim_recs, indent=2, default=str)}
 
 Pravila:
 - Odaberi max 4-7 ukupnih akcija (BUY_BELOW, ADD_ON_DIP, WATCHLIST, WAIT, SELL, REDUCE, NO_TRADE)
@@ -257,7 +275,7 @@ Vrati SAMO valjani JSON (bez markdowna, bez teksta izvan JSONa):
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=1000,
+        max_tokens=2000,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -270,14 +288,16 @@ Vrati SAMO valjani JSON (bez markdowna, bez teksta izvan JSONa):
     raw_text = raw_text.strip().rstrip("```").strip()
 
     try:
-        return json.loads(raw_text)
-    except json.JSONDecodeError:
+        start = raw_text.index("{")
+        end = raw_text.rindex("}") + 1
+        return json.loads(raw_text[start:end])
+    except (json.JSONDecodeError, ValueError):
         return {
             "date": current_date,
-            "overall_market_comment": "Analiza nije dostupna.",
+            "overall_market_comment": "Tržišna analiza trenutno nije dostupna.",
             "top_actions": [],
             "watchlist_this_week": [],
-            "no_trade_reason": "Generiranje sažetka nije uspjelo.",
+            "no_trade_reason": None,
             "portfolio_note": "",
             "email_subject_suffix": "0 BUY, 0 SELL",
         }
