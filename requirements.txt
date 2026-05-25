@@ -1,0 +1,7 @@
+streamlit>=1.35.0
+yfinance>=0.2.40
+anthropic>=0.40.0
+pandas>=2.2.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+APScheduler>=3.10.4

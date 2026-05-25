@@ -1,0 +1,92 @@
+{
+  "_meta": {
+    "description": "Main stock universe for autonomous weekly discovery. ~700 NYSE/NASDAQ stocks across 9 sectors, all Revolut-accessible. Each run randomly samples 20-25 stocks so each newsletter covers different candidates.",
+    "source": "S&P 500 + selected Russell 1000 mid-caps",
+    "last_updated": "2026-05-25"
+  },
+  "technology": [
+    "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AVGO", "ORCL", "CRM", "AMD",
+    "QCOM", "INTC", "ADBE", "TXN", "MU", "AMAT", "KLAC", "LRCX", "MRVL",
+    "CDNS", "SNPS", "ACN", "IBM", "INTU", "CSCO", "ANSS", "FTNT", "PTC",
+    "CTSH", "SWKS", "KEYS", "MPWR", "TEL", "GLW", "STX", "WDC", "HPQ",
+    "HPE", "DELL", "NTAP", "GDDY", "PLTR", "SNOW", "DDOG", "CRWD", "ZS",
+    "PANW", "NET", "TEAM", "OKTA", "MDB", "HCP", "HUBS", "NOW", "WDAY",
+    "VEEV", "PAYC", "COUP", "APPF", "PCTY", "CDAY", "BRZE", "DSGX", "CFLT",
+    "GTLB", "ESTC", "TENB", "RPD", "QLYS", "SAIL", "CYBR", "S", "VIAV",
+    "CIEN", "INFN", "CALX", "LITE", "COHR", "IIVI", "FORM", "ONTO"
+  ],
+  "energy": [
+    "XOM", "CVX", "COP", "SLB", "EOG", "MPC", "PSX", "VLO", "DVN", "HAL",
+    "BKR", "OXY", "APA", "MRO", "CTRA", "TRGP", "WMB", "OKE", "KMI",
+    "AM", "LNG", "GLNG", "TELL", "CQP", "RRC", "EQT", "AR", "CNX", "SWN",
+    "CHK", "MTDR", "VTLE", "PDCE", "BATL", "SM", "CPE", "MGY", "CRGY", "ESTE"
+  ],
+  "healthcare": [
+    "JNJ", "UNH", "LLY", "ABBV", "MRK", "TMO", "ABT", "DHR", "PFE", "BMY",
+    "AMGN", "ISRG", "SYK", "BSX", "MDT", "BDX", "EW", "HOLX", "ABC", "MCK",
+    "CAH", "CI", "ELV", "HUM", "CNC", "MOH", "CVS", "GILD", "REGN", "BIIB",
+    "MRNA", "ILMN", "VRTX", "ALNY", "INCY", "IQV", "LH", "DGX", "ZBH", "PODD",
+    "DXCM", "NVST", "ALGN", "RMD", "NVCR", "EXEL", "TECH", "PRGO", "AMED",
+    "ENSG", "LHC", "LHCG", "ACAD", "JAZZ", "BMRN", "RARE", "ALKS", "SAGE",
+    "INSM", "PTGX", "ACRS", "DAWN", "FOLD", "KYMR", "MGNX", "NKTR", "PRTK",
+    "RVMD", "SGEN", "TGTX", "XNCR", "ZYME"
+  ],
+  "industrials": [
+    "GE", "HON", "CAT", "UPS", "FDX", "BA", "RTX", "LMT", "NOC", "GD",
+    "TDG", "HEI", "TXT", "DE", "PH", "EMR", "ETN", "ITW", "IR", "IEX",
+    "XYL", "ROK", "ROP", "GNRC", "FAST", "GWW", "AIT", "MSA", "AME", "VRSK",
+    "HUBB", "FBHS", "MAS", "WMS", "NDSN", "GTLS", "AIRGAIN", "CSL", "AOS",
+    "BMI", "CWCO", "FLOW", "HLIO", "REXNORD", "TT", "CARR", "OTIS", "EXPD",
+    "CHRW", "XPO", "SAIA", "ODFL", "JBHT", "KNX", "WERN", "PTSI", "MRTN",
+    "ECHO", "HUBG", "LSTR", "FWRD", "DCOM", "SMBC", "FFIN", "TCBK", "TRMK"
+  ],
+  "consumer": [
+    "AMZN", "COST", "WMT", "HD", "MCD", "SBUX", "NKE", "LOW", "TGT", "TJX",
+    "ROST", "DG", "DLTR", "BBY", "ETSY", "CHWY", "CHEWY", "FLUT", "DKNG",
+    "LVS", "MGM", "WYNN", "CZR", "BYD", "PENN", "HLT", "MAR", "H", "IHG",
+    "RCL", "CCL", "NCLH", "DAL", "UAL", "AAL", "LUV", "ULTA", "EL", "REVL",
+    "PG", "KO", "PEP", "MDLZ", "GIS", "K", "CPB", "CAG", "HRL", "SJM",
+    "MKC", "HSY", "TSLA", "F", "GM", "STLA", "TM", "HMC", "LCID", "RIVN",
+    "BLNK", "CHPT", "EVGO", "WBD", "PARA", "DIS", "NFLX", "SPOT", "TTD",
+    "ROKU", "FUBO", "VZIO", "SONO", "HEAR", "KOSS", "GPRO"
+  ],
+  "financials": [
+    "BRK.B", "JPM", "BAC", "WFC", "MS", "GS", "C", "AXP", "V", "MA",
+    "USB", "TFC", "PNC", "COF", "DFS", "SYF", "AIG", "MET", "PRU", "AFL",
+    "ALL", "TRV", "PGR", "CB", "HIG", "MMC", "AON", "SCHW", "BLK", "BEN",
+    "IVZ", "AMG", "TROW", "STT", "BK", "NTRS", "FHN", "FITB", "HBAN", "MTB",
+    "CFG", "ZION", "PACW", "WAL", "FBP", "CATY", "EWBC", "HOPE", "FFBC",
+    "OFG", "BPOP", "TBBK", "BANR", "BOKF", "GBCI", "HTLF", "IBTX", "INDB",
+    "NBHC", "NBTB", "PPBI", "SFBS", "SFNC", "STBA", "TCBI", "TOWN", "UBSI",
+    "UMPQ", "UVSP", "VBTX", "WSFS"
+  ],
+  "materials": [
+    "LIN", "APD", "ECL", "PPG", "SHW", "IFF", "CE", "DD", "EMN", "HUN",
+    "OLN", "WLK", "ALB", "FCX", "NEM", "GOLD", "AEM", "APA", "VALE", "RIO",
+    "SCCO", "NUE", "X", "CLF", "AA", "RS", "CMC", "ATI", "STLD", "WOR",
+    "CENX", "KALU", "MTRX", "AZEK", "DOOR", "TREX", "UFPI", "LPX", "WY",
+    "PCH", "PotlatchDeltic", "CSWC", "HWKN", "KWR", "ASIX", "IOSP", "SXCP",
+    "AMMO", "POWL", "NN", "MFIN", "HEES", "MATX", "GBX"
+  ],
+  "real_estate": [
+    "AMT", "PLD", "EQIX", "SPG", "O", "WELL", "AVB", "EQR", "DLR", "WPC",
+    "PSA", "EXR", "VICI", "NNN", "SRC", "STOR", "STAG", "FR", "EGP",
+    "COLD", "REXR", "CUBE", "LSI", "NSA", "SELF", "JBGS", "CWK", "CBRE",
+    "JLL", "CIGI", "NRE", "IRM", "LADR", "BXMT", "GPMT", "ACRE", "ACR",
+    "HFBL", "RC", "RITM", "EARN", "AGNC", "NLY", "TWO", "ARMOUR", "ARR",
+    "CIM", "NYMT", "ORC", "BRMK", "CHMI"
+  ],
+  "utilities": [
+    "NEE", "SO", "DUK", "D", "AEP", "EXC", "XEL", "SRE", "ED", "ETR",
+    "PEG", "FE", "CMS", "NI", "EVRG", "AES", "AWK", "WEC", "PPL", "DTE",
+    "CNP", "LNT", "ES", "ATO", "NWE", "MGEE", "OTTR", "AVA", "ARTNA",
+    "CWCO", "MSEX", "SJW", "YORW", "PCYO", "PESI", "UTL"
+  ],
+  "communication": [
+    "GOOGL", "META", "NFLX", "DIS", "CMCSA", "VZ", "T", "TMUS", "EA",
+    "TTWO", "ATVI", "PARA", "FOX", "OMC", "IPG", "MTCH", "IAC", "NYT",
+    "NWSA", "SIRI", "LUMN", "FWONA", "LYV", "MSGS", "MSGE", "CLVT",
+    "ANGI", "CARS", "CARG", "CDW", "COUR", "DUOL", "TWTR", "SNAP",
+    "PINS", "RDDT", "BZFD", "BARK", "OYST"
+  ]
+}

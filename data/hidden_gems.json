@@ -1,0 +1,121 @@
+{
+  "_meta": {
+    "description": "Hidden gem candidates — small/micro-cap stocks typically under $12 with 5-10 year structural growth potential in emerging sectors. Think Nvidia in 2016, Amazon in 2003, Tesla in 2012 — before broad market recognition. Price filter ($12 cap) is applied at runtime via yfinance — stocks that have risen above $12 are automatically skipped this run but stay in the pool for future dips.",
+    "criteria": "Market cap > $50M, NYSE/NASDAQ listed (Revolut-accessible), real revenue or credible pipeline, in a sector with a structural multi-year tailwind",
+    "total_approx": "155+",
+    "price_cap_usd": 12,
+    "last_updated": "2026-05-25",
+    "note": "Prices move fast in this segment. A stock listed here may be above $12 today — the runtime check filters it automatically. Conversely, a mainstream stock that crashes below $12 is NOT a gem — only the thesis and sector make it one."
+  },
+
+  "ai_and_data_infrastructure": {
+    "description": "AI enablers, niche software, data platforms — pre-mainstream recognition phase",
+    "tickers": [
+      "SOUN",  "BBAI",  "NNOX",  "MTTR",  "PAYO",
+      "MAPS",  "DM",    "AEYE",  "CODA",  "XPERI",
+      "PERI",  "HCAT",  "VERI",  "SCWX",  "CXAI",
+      "IREN",  "CIFR",  "OTRK",  "VRNT",  "NTCT"
+    ]
+  },
+
+  "quantum_computing": {
+    "description": "Quantum hardware and software — 5-10 year commercialisation horizon, binary risk",
+    "tickers": [
+      "IONQ",  "QBTS",  "QUBT",  "RGTI",  "ARQIT",
+      "SPIR",  "BTBT",  "CLBT",  "PIRS",  "LIXT"
+    ]
+  },
+
+  "space_and_satellites": {
+    "description": "Commercial space, launch services, earth observation — secular long-term play",
+    "tickers": [
+      "RKLB",  "ASTS",  "LUNR",  "RDW",   "PL",
+      "SATL",  "SPCE",  "MNTS",  "GSAT",  "TSAT",
+      "ASTR",  "IRDM",  "BGSF"
+    ]
+  },
+
+  "energy_transition_renewables": {
+    "description": "Solar, wind, grid storage, clean energy — energy independence thesis",
+    "tickers": [
+      "PLUG",  "FCEL",  "BLDP",  "CLNE",  "BE",
+      "STEM",  "NOVA",  "SPWR",  "ARRY",  "SHLS",
+      "MAXN",  "FTCI",  "RUN",   "AMRC",  "ENPH",
+      "FLNC",  "HPNN",  "SUNW",  "CSIQ",  "SEDG"
+    ]
+  },
+
+  "ev_and_next_gen_transport": {
+    "description": "Electric vehicles, charging infrastructure, urban air mobility — mobility revolution",
+    "tickers": [
+      "EVGO",  "CHPT",  "BLNK",  "MVST",  "JOBY",
+      "ACHR",  "WKHS",  "SOLO",  "AYRO",  "NKLA",
+      "GOEV",  "IDEANOMICS", "HYZN", "ZEV",  "ELVA"
+    ]
+  },
+
+  "defense_drones_robotics": {
+    "description": "Drone manufacturers, defense tech, autonomous systems — geopolitical spending surge",
+    "tickers": [
+      "RCAT",  "UAVS",  "ARLO",  "MVIS",  "KOPN",
+      "LAZR",  "INVZ",  "LIDR",  "INDI",  "BLDE",
+      "VTOL",  "MBOT",  "OUST",  "SLDP",  "TRMR"
+    ]
+  },
+
+  "biotech_genomics": {
+    "description": "Drug developers, diagnostics, biomarkers — pipeline-driven binary upside",
+    "tickers": [
+      "EDIT",  "SEER",  "FATE",  "NKTR",  "BLUE",
+      "SELB",  "SGMO",  "FIXX",  "TGTX",  "GTHX",
+      "PRLD",  "TPST",  "IMAB",  "ARDX",  "BMEA",
+      "IMTX",  "SANA",  "RCKT",  "RIGL",  "AGEN",
+      "MGNX",  "DVAX",  "CALT",  "FOLD",  "FUSN"
+    ]
+  },
+
+  "gene_and_cell_therapy": {
+    "description": "CRISPR, gene editing, cell therapy — next frontier of medicine, 5-10y horizon",
+    "tickers": [
+      "BEAM",  "NTLA",  "VERV",  "CRSP",  "ZYME",
+      "RARE",  "ALKS",  "KYMR",  "DAWN",  "RVMD",
+      "ACRS",  "BMRN",  "DNLI",  "PTGX",  "NKTR"
+    ]
+  },
+
+  "fintech_insurtech_neobanking": {
+    "description": "Next-gen financial services, embedded finance, digital insurance — disrupting incumbents",
+    "tickers": [
+      "DAVE",  "OPEN",  "LMND",  "RELY",  "LPRO",
+      "RPAY",  "NRDS",  "UPST",  "AFRM",  "HIPPO",
+      "CURO",  "ATLC",  "IIIV",  "PRPB",  "MGNI"
+    ]
+  },
+
+  "critical_minerals_battery": {
+    "description": "Lithium, cobalt, rare earths, copper — EV and grid storage supply chain",
+    "tickers": [
+      "LAC",   "PMET",  "SLI",   "LTHM",  "PLL",
+      "MP",    "SGML",  "GATO",  "USAS",  "NOVL",
+      "CPER",  "ABML",  "LIVENT", "STLA",  "NXE"
+    ]
+  },
+
+  "agri_food_biotech": {
+    "description": "AgriTech, alternative proteins, food innovation — feeding 10B people thesis",
+    "tickers": [
+      "AGFY",  "GRWG",  "HYFM",  "TTCF",  "BYND",
+      "OATS",  "VVPR",  "HIMS",  "APPH",  "SMPL",
+      "VITL",  "BRCC",  "FRSH"
+    ]
+  },
+
+  "cybersecurity_privacy": {
+    "description": "Smaller cybersecurity players — infrastructure digitisation + AI attack surface",
+    "tickers": [
+      "VRNT",  "RDWR",  "SVMK",  "QLYS",  "NTCT",
+      "VNET",  "MAPS",  "SCWX",  "CXAI",  "ACMR",
+      "EVTC",  "FSLY",  "DOCN"
+    ]
+  }
+}

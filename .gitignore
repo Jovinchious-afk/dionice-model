@@ -1,0 +1,13 @@
+.env
+supabase pass.txt
+data/yfinance_cache.json
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+Thumbs.db
+*.xlsx
+*.docx
+~$*
+*.tmp
+.streamlit/secrets.toml
