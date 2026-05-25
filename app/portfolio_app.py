@@ -110,29 +110,15 @@ def compute_portfolio(tx_df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def fetch_live_prices(symbols: tuple) -> dict:
-    """Fetches current USD prices via yfinance. Cached 5 minutes."""
-    if not symbols:
-        return {}
-    try:
-        tickers = list(symbols)
-        if len(tickers) == 1:
-            data = yf.download(tickers[0], period="2d", progress=False, auto_adjust=True)
-            close = data["Close"].dropna()
-            price = float(close.iloc[-1]) if not close.empty else None
-            return {tickers[0]: round(price, 4) if price else None}
-        else:
-            data = yf.download(tickers, period="2d", progress=False, auto_adjust=True)
-            close = data["Close"]
-            result = {}
-            for sym in tickers:
-                try:
-                    col = close[sym].dropna()
-                    result[sym] = round(float(col.iloc[-1]), 4) if not col.empty else None
-                except Exception:
-                    result[sym] = None
-            return result
-    except Exception:
-        return {sym: None for sym in symbols}
+    """Fetches latest USD close prices via yfinance. period=5d covers weekends."""
+    result = {}
+    for sym in symbols:
+        try:
+            hist = yf.Ticker(sym).history(period="5d")
+            result[sym] = round(float(hist["Close"].iloc[-1]), 2) if not hist.empty else None
+        except Exception:
+            result[sym] = None
+    return result
 
 
 # ── Sidebar navigation ───────────────────────────────────────────────────────
@@ -207,7 +193,7 @@ if page == "Portfolio":
         display["P&L %"] = display["P&L %"].apply(
             lambda v: f"{v:+.2f}%" if v is not None else "N/A"
         )
-        display["Avg Cost (USD)"] = display["Avg Cost (USD)"].apply(lambda v: f"${v:,.4f}")
+        display["Avg Cost (USD)"] = display["Avg Cost (USD)"].apply(lambda v: f"${v:,.2f}")
         display["Total Cost (USD)"] = display["Total Cost (USD)"].apply(lambda v: f"${v:,.2f}")
 
         st.subheader("Current Holdings")
