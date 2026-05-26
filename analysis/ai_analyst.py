@@ -6,6 +6,7 @@ Every recommendation is compared against "do nothing / hold cash / add to best p
 
 import json
 import os
+import re
 from datetime import datetime
 from typing import Any
 
@@ -15,6 +16,73 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MODEL = "claude-haiku-4-5-20251001"
+
+
+# --- Evidence table formatters ---
+def _ev(val, decimals: int = 1, suffix: str = "") -> str:
+    if val is None:
+        return "N/A"
+    try:
+        return f"{float(val):.{decimals}f}{suffix}"
+    except (TypeError, ValueError):
+        return str(val)
+
+
+def _ev_pct(val, decimals: int = 1) -> str:
+    """val is already a percentage value (e.g. fcf_yield=7.74)."""
+    if val is None:
+        return "N/A"
+    try:
+        return f"{float(val):.{decimals}f}%"
+    except (TypeError, ValueError):
+        return str(val)
+
+
+def _ev_pct_decimal(val, decimals: int = 1) -> str:
+    """val is a decimal fraction (e.g. op_margin=0.1557) → converts to %."""
+    if val is None:
+        return "N/A"
+    try:
+        return f"{float(val) * 100:.{decimals}f}%"
+    except (TypeError, ValueError):
+        return str(val)
+
+
+def _ev_growth(val, decimals: int = 1) -> str:
+    """val is a decimal fraction → shows as ±X.X% YoY."""
+    if val is None:
+        return "N/A"
+    try:
+        pct = float(val) * 100
+        sign = "+" if pct >= 0 else ""
+        return f"{sign}{pct:.{decimals}f}% YoY"
+    except (TypeError, ValueError):
+        return str(val)
+
+
+def _ev_price(val) -> str:
+    if val is None:
+        return "N/A"
+    try:
+        return f"${float(val):.2f}"
+    except (TypeError, ValueError):
+        return str(val)
+
+
+# Cyrillic → Latin lookalike map (covers common AI confusion characters)
+_CYRILLIC_MAP = str.maketrans(
+    "АаВЕеКМНОоРрСсТУухХіІпЗзбвгдёжийклмнптфцчшщъыьэюяёЙЁЪЫЬЭЮЯДГЖИЛФЦЧШЩ",
+    "AaBEeKMHOoPpCcTYyxXiIpZzbvgdejijklmnptfcchhhbbieiuadelgzilftcchhhch"
+)
+
+
+def _sanitize_cyrillic(text: str) -> str:
+    """Strip/replace visually similar Cyrillic characters with Latin equivalents."""
+    # Replace known lookalikes
+    result = text.translate(_CYRILLIC_MAP)
+    # Remove any remaining Cyrillic characters (U+0400–U+04FF)
+    result = re.sub(r"[Ѐ-ӿ]", "", result)
+    return result
 
 SYSTEM_PROMPT = """Ti si disciplinirani analitičar dioničkog tržišta koji piše na HRVATSKOM jeziku (uz financijske termine na engleskom: FCF, EBITDA, P/E, Debt/Equity, itd.).
 
@@ -63,7 +131,9 @@ SIGNALI ZA PRODAJU (preporuči SELL ili REDUCE samo ako):
 - Zalihe rastu puno brže od prodaje
 
 OUTPUT FORMAT: Vraćaj SAMO valjani JSON, bez markdowna, bez teksta izvan JSONa.
-Svi tekstualni opisi (thesis, catalyst, downside_scenario, itd.) MORAJU biti na HRVATSKOM jeziku."""
+Svi tekstualni opisi (thesis, catalyst, downside_scenario, itd.) MORAJU biti na HRVATSKOM jeziku.
+
+PISMO: Koristi ISKLJUČIVO latinična slova (a-z, A-Z, hrvatska dijakritika: č,ć,š,ž,đ). NIKAD ne koristi ćirilična slova."""
 
 
 def analyze_stock(
@@ -128,6 +198,23 @@ ULAGAČEVA OSOBNA TEZA ZA OVU DIONICU (OBAVEZNO POŠTUJ):
 UPOZORENJE: Ne preporučuj SELL ili REDUCE bez iznimno jakog razloga koji direktno proturječi ovoj tezi.
 """
 
+    # Pre-format evidence table values — prevents raw floats appearing in Claude's output
+    _f_price    = _ev_price(fundamentals.get("current_price"))
+    _f_pe       = _ev(fundamentals.get("pe"), decimals=1)
+    _f_fwd_pe   = _ev(fundamentals.get("forward_pe"), decimals=1)
+    _f_peg      = _ev(fundamentals.get("peg"), decimals=2)
+    _f_de       = _ev(fundamentals.get("debt_equity"), decimals=1)
+    _f_rev      = _ev_growth(fundamentals.get("revenue_growth_yoy"))
+    _f_fcf      = _ev_pct(fundamentals.get("fcf_yield"), decimals=2)
+    _f_margin   = _ev_pct_decimal(fundamentals.get("op_margin"))
+    _f_st       = (
+        f"{sentiment_signal.get('bullish_pct', 0):.0f}%↑ / "
+        f"{sentiment_signal.get('bearish_pct', 0):.0f}%↓ | "
+        f"hype: {sentiment_hype}/10"
+        if sentiment_signal else "N/A"
+    )
+    _f_earn     = (f"{earnings_days}d ({earnings_date})" if earnings_days is not None else "N/A")
+
     user_prompt = f"""Analiziraj ovu dionicu i vrati JSON preporuku NA HRVATSKOM JEZIKU (financijski termini mogu ostati na engleskom).
 
 DATUM: {current_date}
@@ -174,19 +261,19 @@ Return ONLY this JSON structure (no markdown, no text outside JSON):
   "confidence": <integer 1-10>,
   "revolut_available": true,
   "evidence_table": {{
-    "current_price": "{fundamentals.get('current_price', 'N/A')}",
+    "current_price": "{_f_price}",
     "buy_zone": "<same as buy_zone above>",
-    "pe": "{fundamentals.get('pe', 'N/A')}",
-    "forward_pe": "{fundamentals.get('forward_pe', 'N/A')}",
-    "peg": "{fundamentals.get('peg', 'N/A')}",
-    "debt_equity": "{fundamentals.get('debt_equity', 'N/A')}",
-    "revenue_growth": "{fundamentals.get('revenue_growth_yoy', 'N/A')}",
-    "fcf_yield": "{fundamentals.get('fcf_yield', 'N/A')}",
-    "op_margin": "{fundamentals.get('op_margin', 'N/A')}",
+    "pe": "{_f_pe}",
+    "forward_pe": "{_f_fwd_pe}",
+    "peg": "{_f_peg}",
+    "debt_equity": "{_f_de}",
+    "revenue_growth": "{_f_rev}",
+    "fcf_yield": "{_f_fcf}",
+    "op_margin": "{_f_margin}",
     "insider_signal": "<Buying/Selling/Neutral>",
     "congress_signal": "Weak — {congress_buys} buy(s), {congress_sells} sell(s)",
-    "stocktwits": "{f"{sentiment_signal.get('bullish_pct', 0):.0f}%↑ / {sentiment_signal.get('bearish_pct', 0):.0f}%↓ | hype: {sentiment_hype}/10" if sentiment_signal else "N/A"}",
-    "earnings_in": "{f"{earnings_days}d ({earnings_date})" if earnings_days is not None else "N/A"}",
+    "stocktwits": "{_f_st}",
+    "earnings_in": "{_f_earn}",
     "fundamental_score": "{score_result.get('total_score', 0)}/100",
     "confidence": "<same as confidence above>/10"
   }}
@@ -208,6 +295,9 @@ Return ONLY this JSON structure (no markdown, no text outside JSON):
             raw_text = raw_text[4:]
     raw_text = raw_text.strip().rstrip("```").strip()
 
+    # Sanitize any Cyrillic characters that sneak in
+    raw_text = _sanitize_cyrillic(raw_text)
+
     try:
         result = json.loads(raw_text)
     except json.JSONDecodeError:
@@ -219,6 +309,11 @@ Return ONLY this JSON structure (no markdown, no text outside JSON):
         }
 
     result["is_hidden_gem"] = is_hidden_gem
+
+    # Override evidence_table fields we control — prevents Claude from mangling them
+    ev = result.setdefault("evidence_table", {})
+    ev["stocktwits"] = _f_st
+    ev["earnings_in"] = _f_earn
 
     # Hard override: hype block (Reddit or StockTwits)
     effective_hype = max((reddit_signal or {}).get("hype_score", 0), sentiment_hype)
