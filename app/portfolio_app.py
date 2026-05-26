@@ -110,14 +110,23 @@ def compute_portfolio(tx_df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def fetch_live_prices(symbols: tuple) -> dict:
-    """Fetches latest USD close prices via yfinance. period=5d covers weekends."""
+    """Fetches latest USD prices via yfinance. Tries fast_info first, falls back to history."""
     result = {}
     for sym in symbols:
+        price = None
         try:
-            hist = yf.Ticker(sym).history(period="5d")
-            result[sym] = round(float(hist["Close"].iloc[-1]), 2) if not hist.empty else None
+            ticker = yf.Ticker(sym)
+            try:
+                price = ticker.fast_info["lastPrice"]
+            except Exception:
+                pass
+            if not price:
+                hist = ticker.history(period="5d")
+                if not hist.empty:
+                    price = float(hist["Close"].iloc[-1])
         except Exception:
-            result[sym] = None
+            pass
+        result[sym] = round(float(price), 2) if price else None
     return result
 
 
