@@ -21,10 +21,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from analysis.congress_tracker import get_congress_signals, get_tickers_from_congress
 from analysis.reddit_tracker import get_tickers_from_reddit, scrape_reddit
 from analysis.fundamentals import fetch_multiple
-from analysis.scorer import score_stock, classify_category
+from analysis.scorer import score_stock, classify_category, hard_exclude
 from analysis.ai_analyst import analyze_stock, generate_weekly_summary
 from analysis.email_sender import build_html_email, send_email
 from analysis.stock_discovery import select_candidates
+from analysis.sentiment_tracker import get_sentiment_batch
 from analysis.supabase_client import get_supabase
 
 GEM_PRICE_CAP = 12.0  # hidden gems must be under this price to pass through
@@ -214,19 +215,26 @@ def main():
         reddit_tickers=reddit_tickers,
         congress_tickers=congress_tickers,
         dt=today,
-        max_main=8,
-        max_gems=5,
+        max_main=25,
+        max_gems=8,
     )
     all_candidates = list(dict.fromkeys(main_candidates + gem_candidates))
     print(f"[run_weekly] Total candidates to fetch: {all_candidates}")
 
-    # 4. Scrape Reddit signals for all candidates
-    print("[run_weekly] Scraping Reddit signals...")
+    # 4. StockTwits sentiment for all candidates
+    print("[run_weekly] Fetching StockTwits sentiment...")
+    sentiment_signals = {}
+    try:
+        sentiment_signals = get_sentiment_batch(all_candidates)
+    except Exception as exc:
+        print(f"[run_weekly] StockTwits fetch failed: {exc}")
+
+    # Also try Reddit (may 403 on GitHub Actions — best-effort)
     reddit_signals = {}
     try:
         reddit_signals = scrape_reddit(hours_back=48, target_tickers=all_candidates)
     except Exception as exc:
-        print(f"[run_weekly] Reddit scrape failed: {exc}")
+        print(f"[run_weekly] Reddit scrape failed (non-critical): {exc}")
 
     # 5. Congress signals
     print("[run_weekly] Fetching Congress signals...")
@@ -240,7 +248,26 @@ def main():
     print("[run_weekly] Fetching fundamentals (this may take 2-3 minutes)...")
     fundamentals_map = fetch_multiple(all_candidates, delay_seconds=1.5)
 
-    # 6b. Update portfolio positions with live prices from fundamentals
+    # 6b. Hard exclude structurally broken stocks (portfolio positions bypass)
+    print("[run_weekly] Applying hard exclusion filter...")
+    filtered_fundamentals = {}
+    for ticker, fund in fundamentals_map.items():
+        if fund.get("fetch_error"):
+            print(f"[run_weekly] Skipping {ticker} — fetch error: {fund['fetch_error']}")
+            continue
+        if ticker in portfolio_tickers:
+            filtered_fundamentals[ticker] = fund  # always keep portfolio positions
+            continue
+        cat = "speculative_growth" if ticker in set(gem_candidates) else classify_category(fund)
+        should_ex, reason = hard_exclude(fund, cat)
+        if should_ex:
+            print(f"[run_weekly] Hard exclude {ticker}: {reason}")
+        else:
+            filtered_fundamentals[ticker] = fund
+    fundamentals_map = filtered_fundamentals
+    print(f"[run_weekly] {len(fundamentals_map)} stocks passed hard exclusion filter")
+
+    # 6c. Update portfolio positions with live prices from fundamentals
     for p in positions:
         fund = fundamentals_map.get(p["symbol"], {})
         price = fund.get("current_price")
@@ -257,10 +284,6 @@ def main():
     gem_set = set(gem_candidates)
 
     for ticker, fund in fundamentals_map.items():
-        if fund.get("fetch_error"):
-            print(f"[run_weekly] Skipping {ticker} — fetch error: {fund['fetch_error']}")
-            continue
-
         # Hidden gem price check — drop if above cap
         if ticker in gem_set:
             try:
@@ -311,6 +334,7 @@ def main():
                 macro_view=meta.get("macro_view"),
                 do_not_sell_until=meta.get("do_not_sell_until"),
                 is_hidden_gem=is_gem,
+                sentiment_signal=sentiment_signals.get(ticker),
             )
             recommendations.append(rec)
             gem_label = " 💎" if is_gem else ""

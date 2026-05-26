@@ -247,6 +247,37 @@ def score_stock(fundamentals: dict, category: str, sector_pe: float = 20.0) -> d
     }
 
 
+def hard_exclude(fund: dict, category: str) -> tuple[bool, str]:
+    """
+    Returns (should_exclude, reason). True = drop this ticker before AI analysis.
+    Filters out structurally broken companies regardless of score.
+    Portfolio positions bypass this check in run_weekly.py.
+    """
+    market_cap = fund.get("market_cap") or 0
+    if market_cap and market_cap < 30_000_000:
+        return True, f"market_cap ${market_cap/1e6:.1f}M < $30M"
+
+    cr = fund.get("current_ratio")
+    if cr is not None and cr < 0.3:
+        return True, f"current_ratio {cr:.2f} < 0.3 (likely insolvent)"
+
+    de = fund.get("debt_equity")
+    cr_val = cr or 1.0
+    if de is not None and de > 600 and cr_val < 0.5:
+        return True, f"D/E {de:.0f} + CR {cr_val:.2f} — extreme leverage + illiquidity"
+
+    if category not in ("speculative_growth",):
+        fcf_yield = fund.get("fcf_yield")
+        if fcf_yield is not None and fcf_yield < -40.0:
+            return True, f"FCF yield {fcf_yield:.1f}% < -40% (cash burning too fast)"
+
+    rec = (fund.get("analyst_recommendation") or "").lower()
+    if rec in ("sell", "strong_sell", "underperform"):
+        return True, f"analyst consensus: {rec}"
+
+    return False, ""
+
+
 def classify_category(fundamentals: dict) -> str:
     """
     Heuristically classifies a stock into one of 5 categories

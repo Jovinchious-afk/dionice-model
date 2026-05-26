@@ -75,7 +75,8 @@ def _build_evidence_table(ev: dict) -> str:
         ("Op. margin", ev.get("op_margin", "N/A")),
         ("Insider signal", ev.get("insider_signal", "N/A")),
         ("Congress signal", ev.get("congress_signal", "N/A")),
-        ("Reddit hype", ev.get("reddit_hype", "N/A")),
+        ("StockTwits", ev.get("stocktwits", "N/A")),
+        ("Earnings za", ev.get("earnings_in", "N/A")),
         ("Fund. score", ev.get("fundamental_score", "N/A")),
         ("Confidence", ev.get("confidence", "N/A")),
     ]
@@ -113,6 +114,17 @@ def _build_stock_block(rec: dict) -> str:
     if is_gem:
         gem_badge = "<span style='background:#6a0dad;color:white;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin-left:6px;'>💎 Hidden Gem (5-10g)</span>"
 
+    thesis_breakers = rec.get("thesis_breakers", [])
+    thesis_breakers_html = ""
+    if thesis_breakers:
+        items = "".join(f"<li style='font-size:13px;margin:2px 0;'>{b}</li>" for b in thesis_breakers[:3])
+        thesis_breakers_html = (
+            "<div style='background:#fff8e1;border-left:4px solid #f59e0b;"
+            "padding:10px 14px;margin:8px 0;border-radius:0 4px 4px 0;'>"
+            "<strong style='font-size:13px;'>⚡ Što bi promijenilo preporuku:</strong>"
+            f"<ul style='margin:4px 0;padding-left:18px;'>{items}</ul></div>"
+        )
+
     red_flags_html = ""
     if red_flags:
         flags = "".join(f"<li style='color:#b30000;font-size:13px;'>{f}</li>" for f in red_flags)
@@ -143,6 +155,7 @@ def _build_stock_block(rec: dict) -> str:
   <p style='margin:6px 0;font-size:13px;'><strong>Katalizator:</strong> {catalyst}</p>
   <p style='margin:6px 0;font-size:13px;'><strong>Downside scenarij:</strong> {downside}</p>
   <p style='margin:6px 0;font-size:13px;'><strong>vs. Čekanje/Cash:</strong> {vs_cash}</p>
+  {thesis_breakers_html}
   {red_flags_html}
   <details style='margin-top:10px;'>
     <summary style='cursor:pointer;font-size:13px;color:#555;'>Tablica dokaza ▾</summary>

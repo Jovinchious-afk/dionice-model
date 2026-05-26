@@ -128,6 +128,30 @@ def fetch_fundamentals(ticker: str) -> dict:
         analyst_target = _safe_get(info, "targetMeanPrice")
         recommendation = _safe_get(info, "recommendationKey", "none")
 
+        # --- Earnings calendar ---
+        next_earnings_date = None
+        next_earnings_days = None
+        try:
+            cal = stock.calendar
+            if cal is not None:
+                ed = None
+                if isinstance(cal, dict):
+                    ed = cal.get("Earnings Date")
+                    if isinstance(ed, list) and ed:
+                        ed = ed[0]
+                elif hasattr(cal, "columns") and len(cal.columns) > 0:
+                    ed = cal.columns[0]
+                if ed is not None:
+                    from datetime import date as _date
+                    if hasattr(ed, "date"):
+                        earnings_dt = ed.date()
+                    else:
+                        earnings_dt = datetime.strptime(str(ed)[:10], "%Y-%m-%d").date()
+                    next_earnings_date = earnings_dt.strftime("%Y-%m-%d")
+                    next_earnings_days = (earnings_dt - _date.today()).days
+        except Exception:
+            pass
+
         data = {
             "symbol": symbol,
             "name": _safe_get(info, "longName", symbol),
@@ -184,6 +208,9 @@ def fetch_fundamentals(ticker: str) -> dict:
             # Analyst
             "analyst_target": analyst_target,
             "analyst_recommendation": recommendation,
+            # Earnings calendar
+            "next_earnings_date": next_earnings_date,
+            "next_earnings_days": next_earnings_days,
             # Metadata
             "fetch_error": None,
             "cached": False,

@@ -77,6 +77,7 @@ def analyze_stock(
     macro_view: str | None = None,
     do_not_sell_until: str | None = None,
     is_hidden_gem: bool = False,
+    sentiment_signal: dict | None = None,
 ) -> dict:
     """
     Analyzes a single stock and returns a structured recommendation dict.
@@ -86,6 +87,23 @@ def analyze_stock(
     hype_score = (reddit_signal or {}).get("hype_score", 0)
     congress_buys = (congress_signal or {}).get("buy_count", 0)
     congress_sells = (congress_signal or {}).get("sell_count", 0)
+
+    # StockTwits sentiment block
+    sentiment_block = ""
+    sentiment_hype = 0
+    if sentiment_signal:
+        sentiment_hype = sentiment_signal.get("hype_score", 0)
+        sentiment_block = f"\nSTOCKTWITS SENTIMENT:\n{sentiment_signal.get('bull_bear_summary', '')}"
+
+    # Earnings calendar block
+    earnings_block = ""
+    earnings_days = fundamentals.get("next_earnings_days")
+    earnings_date = fundamentals.get("next_earnings_date", "N/A")
+    if earnings_days is not None:
+        if 0 <= earnings_days <= 7:
+            earnings_block = f"\n⚠️ UPOZORENJE: Earnings za {earnings_days} dana ({earnings_date}) — VISOK rizik volatilnosti! Ne preporučaj BUY tik pred earnings osim s iznimno visokim uvjerenjem."
+        elif 8 <= earnings_days <= 30:
+            earnings_block = f"\nINFO: Earnings za {earnings_days} dana ({earnings_date}) — napomeni u thesis."
 
     gem_context = ""
     if is_hidden_gem:
@@ -113,7 +131,8 @@ UPOZORENJE: Ne preporučuj SELL ili REDUCE bez iznimno jakog razloga koji direkt
     user_prompt = f"""Analiziraj ovu dionicu i vrati JSON preporuku NA HRVATSKOM JEZIKU (financijski termini mogu ostati na engleskom).
 
 DATUM: {current_date}
-{gem_context}{personal_context}
+{gem_context}{personal_context}{earnings_block}{sentiment_block}
+
 FUNDAMENTALNI PODACI:
 {json.dumps(fundamentals, indent=2, default=str)}
 
@@ -149,6 +168,7 @@ Return ONLY this JSON structure (no markdown, no text outside JSON):
   "catalyst": "<what specific event or trend could unlock value in 6-18 months>",
   "downside_scenario": "<what must go wrong to lose 30-50% — be specific>",
   "vs_cash_alternative": "<is this better than doing nothing? Better than adding to existing best position? Explain in 2 sentences>",
+  "thesis_breakers": ["<uvjet 1 koji bi poništio tezu — kratko>", "<uvjet 2>", "<uvjet 3>"],
   "red_flags": ["<list of 1-3 specific concerns>"],
   "hype_override": <true if hype_score >= 7 forced downgrade>,
   "confidence": <integer 1-10>,
@@ -165,7 +185,8 @@ Return ONLY this JSON structure (no markdown, no text outside JSON):
     "op_margin": "{fundamentals.get('op_margin', 'N/A')}",
     "insider_signal": "<Buying/Selling/Neutral>",
     "congress_signal": "Weak — {congress_buys} buy(s), {congress_sells} sell(s)",
-    "reddit_hype": "{hype_score}/10",
+    "stocktwits": "{f"{sentiment_signal.get('bullish_pct', 0):.0f}%↑ / {sentiment_signal.get('bearish_pct', 0):.0f}%↓ | hype: {sentiment_hype}/10" if sentiment_signal else "N/A"}",
+    "earnings_in": "{f"{earnings_days}d ({earnings_date})" if earnings_days is not None else "N/A"}",
     "fundamental_score": "{score_result.get('total_score', 0)}/100",
     "confidence": "<same as confidence above>/10"
   }}
@@ -199,12 +220,13 @@ Return ONLY this JSON structure (no markdown, no text outside JSON):
 
     result["is_hidden_gem"] = is_hidden_gem
 
-    # Hard override: hype block
-    if (reddit_signal or {}).get("hype_score", 0) >= 7:
+    # Hard override: hype block (Reddit or StockTwits)
+    effective_hype = max((reddit_signal or {}).get("hype_score", 0), sentiment_hype)
+    if effective_hype >= 7:
         if result.get("action") in ("BUY_BELOW", "ADD_ON_DIP"):
             result["action"] = "WATCHLIST"
             result["hype_override"] = True
-            result["hype_note"] = f"Action downgraded from BUY to WATCHLIST — Reddit hype score {reddit_signal['hype_score']}/10"
+            result["hype_note"] = f"Action downgraded from BUY to WATCHLIST — hype score {effective_hype}/10"
 
     # Hard override: low confidence
     if result.get("confidence", 10) < 6:
