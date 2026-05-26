@@ -20,6 +20,7 @@ class SupabaseTable:
             "Content-Type": "application/json",
             "Prefer": "return=representation",
         }
+        self._filters = []
 
     def select(self, columns: str = "*"):
         self._select = columns
