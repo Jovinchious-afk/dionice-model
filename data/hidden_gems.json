@@ -2,19 +2,22 @@
   "_meta": {
     "description": "Hidden gem candidates — small/micro-cap stocks typically under $12 with 5-10 year structural growth potential in emerging sectors. Think Nvidia in 2016, Amazon in 2003, Tesla in 2012 — before broad market recognition. Price filter ($12 cap) is applied at runtime via yfinance — stocks that have risen above $12 are automatically skipped this run but stay in the pool for future dips.",
     "criteria": "Market cap > $50M, NYSE/NASDAQ listed (Revolut-accessible), real revenue or credible pipeline, in a sector with a structural multi-year tailwind",
-    "total_approx": "155+",
+    "total_approx": "240+",
     "price_cap_usd": 12,
-    "last_updated": "2026-05-25",
+    "last_updated": "2026-05-26",
+    "removed_bankruptcies": "SPCE, NOVA, ASTR, SPWR, NKLA, GOEV, HYZN, ZEV, SOLO, MTTR, APPH, GTHX, BLUE, LTHM, LIVENT, GATO",
+    "removed_misclassified": "STLA (large cap), CPER (ETF), VNET (delisted NASDAQ), BGSF (staffing not space), PIRS (pharma not quantum), TRMR (ad-tech not defense), MBOT (biotech not drones), HPNN (bank not energy), SVMK (went private)",
     "note": "Prices move fast in this segment. A stock listed here may be above $12 today — the runtime check filters it automatically. Conversely, a mainstream stock that crashes below $12 is NOT a gem — only the thesis and sector make it one."
   },
 
   "ai_and_data_infrastructure": {
-    "description": "AI enablers, niche software, data platforms — pre-mainstream recognition phase",
+    "description": "AI enablers, niche software, data platforms, edge AI — pre-mainstream recognition phase",
     "tickers": [
-      "SOUN",  "BBAI",  "NNOX",  "MTTR",  "PAYO",
-      "MAPS",  "DM",    "AEYE",  "CODA",  "XPERI",
-      "PERI",  "HCAT",  "VERI",  "SCWX",  "CXAI",
-      "IREN",  "CIFR",  "OTRK",  "VRNT",  "NTCT"
+      "SOUN",  "BBAI",  "NNOX",  "PAYO",  "DM",
+      "AEYE",  "XPERI", "PERI",  "HCAT",  "VERI",
+      "IREN",  "OTRK",  "CXAI",  "CODA",  "SCWX",
+      "INOD",  "GFAI",  "BTDR",  "BKSY",  "LPSN",
+      "ABSI",  "RXRX"
     ]
   },
 
@@ -22,64 +25,69 @@
     "description": "Quantum hardware and software — 5-10 year commercialisation horizon, binary risk",
     "tickers": [
       "IONQ",  "QBTS",  "QUBT",  "RGTI",  "ARQIT",
-      "SPIR",  "BTBT",  "CLBT",  "PIRS",  "LIXT"
+      "CLBT",  "LIXT",  "SPIR"
     ]
   },
 
   "space_and_satellites": {
-    "description": "Commercial space, launch services, earth observation — secular long-term play",
+    "description": "Commercial space, launch services, earth observation, satellite communications",
     "tickers": [
       "RKLB",  "ASTS",  "LUNR",  "RDW",   "PL",
-      "SATL",  "SPCE",  "MNTS",  "GSAT",  "TSAT",
-      "ASTR",  "IRDM",  "BGSF"
+      "SATL",  "GSAT",  "TSAT",  "MNTS",  "IRDM"
     ]
   },
 
   "energy_transition_renewables": {
-    "description": "Solar, wind, grid storage, clean energy — energy independence thesis",
+    "description": "Solar, wind, grid storage, clean energy, sustainable fuels — energy independence thesis",
     "tickers": [
       "PLUG",  "FCEL",  "BLDP",  "CLNE",  "BE",
-      "STEM",  "NOVA",  "SPWR",  "ARRY",  "SHLS",
-      "MAXN",  "FTCI",  "RUN",   "AMRC",  "ENPH",
-      "FLNC",  "HPNN",  "SUNW",  "CSIQ",  "SEDG"
+      "STEM",  "ARRY",  "SHLS",  "MAXN",  "FTCI",
+      "RUN",   "AMRC",  "ENPH",  "FLNC",  "SUNW",
+      "CSIQ",  "SEDG",  "FLUX",  "HYLN",  "NUVVE",
+      "GEVO",  "OPAL",  "NRGV"
     ]
   },
 
   "ev_and_next_gen_transport": {
-    "description": "Electric vehicles, charging infrastructure, urban air mobility — mobility revolution",
+    "description": "Electric vehicles, charging infrastructure, urban air mobility, autonomous systems",
     "tickers": [
       "EVGO",  "CHPT",  "BLNK",  "MVST",  "JOBY",
-      "ACHR",  "WKHS",  "SOLO",  "AYRO",  "NKLA",
-      "GOEV",  "IDEANOMICS", "HYZN", "ZEV",  "ELVA"
+      "ACHR",  "WKHS",  "AYRO",  "AEVA",  "WPRT",
+      "REE",   "BLBD",  "IDEA"
     ]
   },
 
   "defense_drones_robotics": {
-    "description": "Drone manufacturers, defense tech, autonomous systems — geopolitical spending surge",
+    "description": "Drone manufacturers, defense tech, autonomous systems, military AI — geopolitical spending surge",
     "tickers": [
       "RCAT",  "UAVS",  "ARLO",  "MVIS",  "KOPN",
       "LAZR",  "INVZ",  "LIDR",  "INDI",  "BLDE",
-      "VTOL",  "MBOT",  "OUST",  "SLDP",  "TRMR"
+      "VTOL",  "OUST",  "SLDP",  "KULR",  "ONDS",
+      "AISP",  "MKFG"
     ]
   },
 
   "biotech_genomics": {
     "description": "Drug developers, diagnostics, biomarkers — pipeline-driven binary upside",
     "tickers": [
-      "EDIT",  "SEER",  "FATE",  "NKTR",  "BLUE",
-      "SELB",  "SGMO",  "FIXX",  "TGTX",  "GTHX",
-      "PRLD",  "TPST",  "IMAB",  "ARDX",  "BMEA",
-      "IMTX",  "SANA",  "RCKT",  "RIGL",  "AGEN",
-      "MGNX",  "DVAX",  "CALT",  "FOLD",  "FUSN"
+      "EDIT",  "SEER",  "FATE",  "NKTR",  "SELB",
+      "SGMO",  "FIXX",  "TGTX",  "PRLD",  "TPST",
+      "IMAB",  "ARDX",  "BMEA",  "IMTX",  "SANA",
+      "RCKT",  "RIGL",  "AGEN",  "MGNX",  "DVAX",
+      "CALT",  "FOLD",  "FUSN",  "AKBA",  "ANAB",
+      "RLAY",  "IMVT",  "VERA",  "ALEC",  "PRAX",
+      "KROS",  "NUVL",  "CRDF",  "HOOK",  "PMVP",
+      "GOSS",  "ARQT",  "ADAP",  "FLGT",  "BTAI",
+      "CRVS",  "ONCO"
     ]
   },
 
   "gene_and_cell_therapy": {
     "description": "CRISPR, gene editing, cell therapy — next frontier of medicine, 5-10y horizon",
     "tickers": [
-      "BEAM",  "NTLA",  "VERV",  "CRSP",  "ZYME",
-      "RARE",  "ALKS",  "KYMR",  "DAWN",  "RVMD",
-      "ACRS",  "BMRN",  "DNLI",  "PTGX",  "NKTR"
+      "BEAM",  "NTLA",  "VERV",  "ZYME",  "KYMR",
+      "DAWN",  "ACRS",  "DNLI",  "PTGX",  "ARCT",
+      "RGNX",  "QURE",  "ALLO",  "ABCL",  "PRME"
     ]
   },
 
@@ -87,35 +95,69 @@
     "description": "Next-gen financial services, embedded finance, digital insurance — disrupting incumbents",
     "tickers": [
       "DAVE",  "OPEN",  "LMND",  "RELY",  "LPRO",
-      "RPAY",  "NRDS",  "UPST",  "AFRM",  "HIPPO",
-      "CURO",  "ATLC",  "IIIV",  "PRPB",  "MGNI"
+      "RPAY",  "NRDS",  "UPST",  "HIPPO", "ATLC",
+      "IIIV",  "MGNI",  "SOFI",  "LC",    "ATER",
+      "TREE",  "ENFN"
     ]
   },
 
   "critical_minerals_battery": {
     "description": "Lithium, cobalt, rare earths, copper — EV and grid storage supply chain",
     "tickers": [
-      "LAC",   "PMET",  "SLI",   "LTHM",  "PLL",
-      "MP",    "SGML",  "GATO",  "USAS",  "NOVL",
-      "CPER",  "ABML",  "LIVENT", "STLA",  "NXE"
+      "LAC",   "PMET",  "SLI",   "PLL",   "MP",
+      "SGML",  "USAS",  "NOVL",  "ABML",  "NXE",
+      "CBAT",  "FREY",  "PPTA",  "USAU"
     ]
   },
 
   "agri_food_biotech": {
-    "description": "AgriTech, alternative proteins, food innovation — feeding 10B people thesis",
+    "description": "AgriTech, alternative proteins, food innovation, health & wellness brands",
     "tickers": [
       "AGFY",  "GRWG",  "HYFM",  "TTCF",  "BYND",
-      "OATS",  "VVPR",  "HIMS",  "APPH",  "SMPL",
-      "VITL",  "BRCC",  "FRSH"
+      "OATS",  "VVPR",  "HIMS",  "SMPL",  "VITL",
+      "BRCC",  "FRSH",  "HNST",  "AVO"
     ]
   },
 
   "cybersecurity_privacy": {
-    "description": "Smaller cybersecurity players — infrastructure digitisation + AI attack surface",
+    "description": "Smaller cybersecurity players — infrastructure digitisation + AI attack surface expansion",
     "tickers": [
-      "VRNT",  "RDWR",  "SVMK",  "QLYS",  "NTCT",
-      "VNET",  "MAPS",  "SCWX",  "CXAI",  "ACMR",
-      "EVTC",  "FSLY",  "DOCN"
+      "VRNT",  "NTCT",  "RDWR",  "ACMR",  "MAPS",
+      "FSLY",  "INTZ",  "ZI",    "BCOV",  "STNE",
+      "LSPD",  "CISO"
+    ]
+  },
+
+  "nuclear_and_uranium": {
+    "description": "Small modular reactors, uranium mining, nuclear fuel — baseload solution for AI datacentre power demand",
+    "tickers": [
+      "SMR",   "OKLO",  "UEC",   "URG",   "DNN",
+      "LTBR",  "UUUU",  "NNE",   "LEU"
+    ]
+  },
+
+  "digital_health_mental_health": {
+    "description": "Telehealth, mental health platforms, digital therapeutics, AI-driven drug discovery — post-COVID structural shift",
+    "tickers": [
+      "TALK",  "LFST",  "TDOC",  "AMWL",  "ACCD",
+      "CLOV",  "PHR",   "GDRX",  "ATAI",  "MNMD",
+      "MDXG",  "CERT"
+    ]
+  },
+
+  "water_and_climate_tech": {
+    "description": "Water scarcity solutions, climate adaptation infrastructure, environmental services — 2B people face water stress by 2050",
+    "tickers": [
+      "CDZI",  "ERII",  "NWPX",  "CWCO",  "ARTNA",
+      "YORW",  "MSEX",  "GWRS"
+    ]
+  },
+
+  "blockchain_digital_assets": {
+    "description": "Bitcoin miners, blockchain infrastructure — high-beta macro plays on digital asset adoption",
+    "tickers": [
+      "MARA",  "RIOT",  "HUT",   "CLSK",  "BTBT",
+      "CIFR"
     ]
   }
 }
