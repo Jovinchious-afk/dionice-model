@@ -42,20 +42,6 @@ class SupabaseTable:
         self._limit_val = n
         return self
 
-    def execute(self):
-        params = f"select={getattr(self, '_select', '*')}"
-        for f in getattr(self, "_filters", []):
-            params += f"&{f}"
-        if getattr(self, "_order_col", None):
-            direction = "desc" if self._order_desc else "asc"
-            params += f"&order={self._order_col}.{direction}"
-        if getattr(self, "_limit_val", None):
-            params += f"&limit={self._limit_val}"
-
-        resp = requests.get(f"{self._url}?{params}", headers=self._headers, timeout=15)
-        resp.raise_for_status()
-        return type("Result", (), {"data": resp.json()})()
-
     def insert(self, row: dict):
         self._insert_data = row
         return self
@@ -64,26 +50,31 @@ class SupabaseTable:
         self._update_data = data
         return self
 
-    def _do_insert(self):
-        resp = requests.post(self._url, json=self._insert_data, headers=self._headers, timeout=15)
+    def execute(self):
+        if hasattr(self, "_insert_data"):
+            resp = requests.post(self._url, json=self._insert_data, headers=self._headers, timeout=15)
+            resp.raise_for_status()
+            return type("Result", (), {"data": resp.json()})()
+
+        if hasattr(self, "_update_data"):
+            params = "&".join(getattr(self, "_filters", []))
+            url = f"{self._url}?{params}" if params else self._url
+            resp = requests.patch(url, json=self._update_data, headers=self._headers, timeout=15)
+            resp.raise_for_status()
+            return type("Result", (), {"data": resp.json()})()
+
+        # SELECT
+        params = f"select={getattr(self, '_select', '*')}"
+        for f in getattr(self, "_filters", []):
+            params += f"&{f}"
+        if getattr(self, "_order_col", None):
+            direction = "desc" if self._order_desc else "asc"
+            params += f"&order={self._order_col}.{direction}"
+        if getattr(self, "_limit_val", None):
+            params += f"&limit={self._limit_val}"
+        resp = requests.get(f"{self._url}?{params}", headers=self._headers, timeout=15)
         resp.raise_for_status()
         return type("Result", (), {"data": resp.json()})()
-
-    def _do_update(self):
-        params = "&".join(getattr(self, "_filters", []))
-        url = f"{self._url}?{params}" if params else self._url
-        resp = requests.patch(url, json=self._update_data, headers=self._headers, timeout=15)
-        resp.raise_for_status()
-        return type("Result", (), {"data": resp.json()})()
-
-    def __getattr__(self, name):
-        # Allows chaining: .insert({}).execute() and .update({}).eq().execute()
-        if name == "execute":
-            if hasattr(self, "_insert_data"):
-                return self._do_insert
-            if hasattr(self, "_update_data"):
-                return self._do_update
-        raise AttributeError(name)
 
 
 class SupabaseClient:
