@@ -69,20 +69,9 @@ def _ev_price(val) -> str:
         return str(val)
 
 
-# Cyrillic → Latin lookalike map (covers common AI confusion characters)
-_CYRILLIC_MAP = str.maketrans(
-    "АаВЕеКМНОоРрСсТУухХіІпЗзбвгдёжийклмнптфцчшщъыьэюяёЙЁЪЫЬЭЮЯДГЖИЛФЦЧШЩ",
-    "AaBEeKMHOoPpCcTYyxXiIpZzbvgdejijklmnptfcchhhbbieiuadelgzilftcchhhch"
-)
-
-
 def _sanitize_cyrillic(text: str) -> str:
-    """Strip/replace visually similar Cyrillic characters with Latin equivalents."""
-    # Replace known lookalikes
-    result = text.translate(_CYRILLIC_MAP)
-    # Remove any remaining Cyrillic characters (U+0400–U+04FF)
-    result = re.sub(r"[Ѐ-ӿ]", "", result)
-    return result
+    """Remove Cyrillic characters that occasionally sneak into Claude's Croatian output."""
+    return re.sub(r"[Ѐ-ӿ]", "", text)
 
 SYSTEM_PROMPT = """Ti si disciplinirani analitičar dioničkog tržišta koji piše na HRVATSKOM jeziku (uz financijske termine na engleskom: FCF, EBITDA, P/E, Debt/Equity, itd.).
 
