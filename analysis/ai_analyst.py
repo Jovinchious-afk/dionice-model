@@ -77,11 +77,10 @@ SYSTEM_PROMPT = """Ti si disciplinirani analitičar dioničkog tržišta koji pi
 
 KONTEKST ULAGAČA:
 - Ulagač iz Hrvatske, platforma Revolut Basic
-- UKUPNI KAPITAL: trenutna vrijednost cijelog portfelja (može biti 15.000-25.000 EUR)
-- Mjesečni doprinos: 300-400 EUR dodatno svakog mjeseca
-- Može prodati dio postojeće pozicije i reinvestirati u drugu dionicu (npr. prodati pola VG = ~9.000 EUR za novu poziciju)
+- UKUPNI KAPITAL: stvarna vrijednost portfelja bit će navedena u promptu (tipično 15.000-20.000 EUR)
+- Može koristiti cijeli kapital: prodati dio VG i reinvestirati, ili koristiti novi novac (300-400 EUR/mj)
+- NEMOJ tretirati ulagača kao da ima samo 300 EUR — to je NOVI novac koji dolazi, nije ukupni kapital
 - 3-4 transakcija mjesečno maksimalno
-- NEMOJ tretirati ulagača kao da ima samo 300 EUR ukupno — to je samo miesčni dodatak
 
 OSNOVNA FILOZOFIJA:
 - Dosadni, profitabilni i podcijenjeni biznisi ispred hype-a
@@ -93,8 +92,14 @@ OSNOVNA FILOZOFIJA:
 
 VALUTA PRAVILO:
 - BUY ZONE i TARGET PRICE uvijek u USD s $ znakom (npr. "< $25.00") jer su sve dionice NYSE/NASDAQ listed i kotiraju u USD
-- Position size je u EUR (tvoj investicijski budžet): small (50-80 EUR), normal (100-150 EUR), full (200-300 EUR)
+- Position size izražen kao % portfelja I kao EUR iznos (koji će biti izračunat u promptu na temelju stvarne vrijednosti portfelja)
 - NIKAD ne koristiti EUR za buy_zone ili target_price
+
+VELIČINA POZICIJE (uvijek baziraj na stvarnoj vrijednosti portfelja iz prompta):
+- mala: 3-5% portfelja — spekulativno, prvi ulazak, niski confidence, hidden gems
+- normalna: 7-10% portfelja — solidno uvjerenje, dobar risk/reward
+- velika: 12-20% portfelja — visoko uvjerenje, jasna podcijenjenost
+- Revolut naplaćuje ~1.5% FX konverziju (EUR→USD) — minimalni upside za isplativost je 5%+
 
 STROGA PRAVILA:
 1. Preporučuj samo dionice dostupne na Revolut platformi
@@ -139,6 +144,8 @@ def analyze_stock(
     sentiment_signal: dict | None = None,
     watchlist_context: str | None = None,
     sector_note: str | None = None,
+    macro_context: str | None = None,
+    portfolio_value_eur: float | None = None,
 ) -> dict:
     """
     Analyzes a single stock and returns a structured recommendation dict.
@@ -185,6 +192,28 @@ def analyze_stock(
     if sector_note:
         sector_block = f"\nSEKTORSKA KONCENTRACIJA: {sector_note}"
 
+    # Macro context block
+    macro_block = ""
+    if macro_context:
+        macro_block = f"\n{macro_context}"
+
+    # Dynamic position size ranges based on actual portfolio value
+    if portfolio_value_eur and portfolio_value_eur > 0:
+        small_low  = round(portfolio_value_eur * 0.03)
+        small_high = round(portfolio_value_eur * 0.05)
+        norm_low   = round(portfolio_value_eur * 0.07)
+        norm_high  = round(portfolio_value_eur * 0.10)
+        full_low   = round(portfolio_value_eur * 0.12)
+        full_high  = round(portfolio_value_eur * 0.20)
+        pos_size_guide = (
+            f"VELIČINA POZICIJE (bazirano na portfelju od ~€{portfolio_value_eur:,.0f}):\n"
+            f"  - mala (3-5%): €{small_low:,}–€{small_high:,} — spekulativno/hidden gem\n"
+            f"  - normalna (7-10%): €{norm_low:,}–€{norm_high:,} — solidno uvjerenje\n"
+            f"  - velika (12-20%): €{full_low:,}–€{full_high:,} — visoko uvjerenje"
+        )
+    else:
+        pos_size_guide = "VELIČINA POZICIJE: portfelj ~€15.000 — mala: €450-750, normalna: €1.050-1.500, velika: €1.800-3.000"
+
     gem_context = ""
     if is_hidden_gem:
         gem_context = """
@@ -228,6 +257,8 @@ UPOZORENJE: Ne preporučuj SELL ili REDUCE bez iznimno jakog razloga koji direkt
     user_prompt = f"""Analiziraj ovu dionicu i vrati JSON preporuku NA HRVATSKOM JEZIKU (financijski termini mogu ostati na engleskom).
 
 DATUM: {current_date}
+{macro_block}
+{pos_size_guide}
 {gem_context}{personal_context}{earnings_block}{week52_block}{watchlist_block}{sector_block}{sentiment_block}
 
 FUNDAMENTALNI PODACI:
@@ -258,7 +289,7 @@ Return ONLY this JSON structure (no markdown, no text outside JSON):
   "action": "<BUY_BELOW|ADD_ON_DIP|WAIT|WATCHLIST|SELL|REDUCE|NO_ACTION>",
   "buy_zone": "<e.g. '< $25.00' or 'N/A'>",
   "target_price": "<e.g. '$32.00' or 'N/A'>",
-  "position_size": "<small (50-80 EUR)|normal (100-150 EUR)|full (200-300 EUR)|N/A>",
+  "position_size": "<npr. 'mala (3-5% / €500-750)' ili 'normalna (7-10% / €1.050-1.500)' ili 'velika (12-20% / €2.000-3.000)' — koristi stvarne iznose iz VELIČINA POZICIJE gore>",
   "business_explanation": "<2-3 sentences explaining what the company does and how it makes money>",
   "investment_thesis": "<max 5 sentences: why this stock, why now>",
   "valuation_verdict": "<cheap/fair/expensive vs sector with 2-3 key numbers>",

@@ -26,6 +26,7 @@ from analysis.ai_analyst import analyze_stock, generate_weekly_summary
 from analysis.email_sender import build_html_email, send_email
 from analysis.stock_discovery import select_candidates
 from analysis.sentiment_tracker import get_sentiment_batch
+from analysis.macro_context import fetch_macro_context, format_macro_for_prompt
 from analysis.supabase_client import get_supabase
 
 GEM_PRICE_CAP = 12.0  # hidden gems must be under this price to pass through
@@ -211,6 +212,17 @@ def main():
     active_watchlist = get_active_watchlist(db_client) if db_client else {}
     print(f"[run_weekly] Active watchlist: {list(active_watchlist.keys())}")
 
+    # 1b. Macro context (yfinance, free)
+    print("[run_weekly] Fetching macro context...")
+    macro_data = {}
+    try:
+        macro_data = fetch_macro_context()
+        macro_summary = ", ".join(f"{k}={v.get('current', 0):.1f}" for k, v in macro_data.items())
+        print(f"[run_weekly] Macro: {macro_summary}")
+    except Exception as exc:
+        print(f"[run_weekly] Macro fetch failed (non-critical): {exc}")
+    macro_text = format_macro_for_prompt(macro_data)
+
     # 2. Reddit + Congress signals (used as bonus signals, not primary discovery)
     print("[run_weekly] Discovering tickers from Reddit...")
     reddit_tickers = get_tickers_from_reddit(hours_back=48, min_mentions=2)
@@ -289,7 +301,22 @@ def main():
             except (TypeError, ValueError):
                 pass
 
-    # 6d. Build portfolio sector map for concentration check
+    # 6d. Compute portfolio value in EUR (USD positions / ~1.09 EUR/USD approximation)
+    USD_TO_EUR = 0.92  # rough conversion — directionally correct
+    portfolio_value_usd = 0.0
+    for p in positions:
+        price_str = p.get("current_price", "N/A")
+        if price_str != "N/A":
+            try:
+                price_usd = float(str(price_str).replace("$", ""))
+                portfolio_value_usd += float(p.get("shares", 0)) * price_usd
+            except (ValueError, TypeError):
+                pass
+    portfolio_value_eur = round(portfolio_value_usd * USD_TO_EUR) if portfolio_value_usd > 0 else None
+    if portfolio_value_eur:
+        print(f"[run_weekly] Portfolio value: ~${portfolio_value_usd:,.0f} USD / ~€{portfolio_value_eur:,} EUR")
+
+    # 6f. Build portfolio sector map for concentration check
     portfolio_sectors: dict[str, int] = {}
     for t in portfolio_tickers:
         fund = fundamentals_map.get(t, {})
@@ -380,6 +407,8 @@ def main():
                 sentiment_signal=sentiment_signals.get(ticker),
                 watchlist_context=watchlist_context,
                 sector_note=sector_note,
+                macro_context=macro_text,
+                portfolio_value_eur=portfolio_value_eur,
             )
             recommendations.append(rec)
             gem_label = " 💎" if is_gem else ""
