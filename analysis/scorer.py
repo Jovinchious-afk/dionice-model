@@ -271,8 +271,15 @@ def hard_exclude(fund: dict, category: str) -> tuple[bool, str]:
         if fcf_yield is not None and fcf_yield < -40.0:
             return True, f"FCF yield {fcf_yield:.1f}% < -40% (cash burning too fast)"
 
+    # Liquidity: lower threshold for speculative/small-cap (gems), stricter for main universe
+    avg_vol = fund.get("avg_volume")
+    vol_threshold = 10_000 if category == "speculative_growth" else 50_000
+    if avg_vol is not None and avg_vol < vol_threshold:
+        return True, f"avg_volume {avg_vol:,.0f}/day < {vol_threshold:,} (illiquid)"
+
+    # Analyst consensus: only exclude strong_sell/underperform, not plain "sell"
     rec = (fund.get("analyst_recommendation") or "").lower()
-    if rec in ("sell", "strong_sell", "underperform"):
+    if rec in ("strong_sell", "underperform"):
         return True, f"analyst consensus: {rec}"
 
     return False, ""

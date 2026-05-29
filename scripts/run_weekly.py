@@ -31,6 +31,16 @@ from analysis.supabase_client import get_supabase
 GEM_PRICE_CAP = 12.0  # hidden gems must be under this price to pass through
 
 
+def get_active_watchlist(client) -> dict[str, dict]:
+    """Fetches active watchlist entries keyed by symbol for cross-checking."""
+    try:
+        result = client.table("watchlist").select("*").eq("status", "ACTIVE").execute()
+        return {row["symbol"]: row for row in (result.data or [])}
+    except Exception as exc:
+        print(f"[run_weekly] Could not load watchlist: {exc}")
+        return {}
+
+
 def get_positions_meta(client) -> dict[str, dict]:
     """Fetches personal thesis per position from positions_meta table."""
     try:
@@ -198,6 +208,8 @@ def main():
 
     db_client = get_supabase()
     positions_meta = get_positions_meta(db_client) if db_client else {}
+    active_watchlist = get_active_watchlist(db_client) if db_client else {}
+    print(f"[run_weekly] Active watchlist: {list(active_watchlist.keys())}")
 
     # 2. Reddit + Congress signals (used as bonus signals, not primary discovery)
     print("[run_weekly] Discovering tickers from Reddit...")
@@ -277,6 +289,15 @@ def main():
             except (TypeError, ValueError):
                 pass
 
+    # 6d. Build portfolio sector map for concentration check
+    portfolio_sectors: dict[str, int] = {}
+    for t in portfolio_tickers:
+        fund = fundamentals_map.get(t, {})
+        sector = fund.get("sector", "")
+        if sector and sector not in ("Unknown", ""):
+            portfolio_sectors[sector] = portfolio_sectors.get(sector, 0) + 1
+    print(f"[run_weekly] Portfolio sectors: {portfolio_sectors}")
+
     # 7. Score each stock
     # Gems use speculative_growth category; main uses auto-classify
     print("[run_weekly] Scoring stocks...")
@@ -323,6 +344,28 @@ def main():
 
         try:
             meta = positions_meta.get(ticker, {})
+
+            # Watchlist cross-check context
+            watchlist_context = None
+            wl = active_watchlist.get(ticker)
+            if wl:
+                watchlist_context = (
+                    f"Dionica je bila preporučena {(wl.get('suggested_at') or '')[:10]} "
+                    f"| Akcija: {wl.get('action', 'N/A')} "
+                    f"| Buy zone: {wl.get('buy_zone', 'N/A')} "
+                    f"| Confidence: {wl.get('confidence', 'N/A')}/10"
+                )
+
+            # Sector concentration note (only for main universe, not gems)
+            sector_note = None
+            if not is_gem:
+                fund_sector = data["fundamentals"].get("sector", "")
+                count = portfolio_sectors.get(fund_sector, 0)
+                if count >= 2:
+                    sector_note = f"Portfelj već ima {count} pozicije u {fund_sector} sektoru — preporuči manji position size ili WAIT ako nema iznimnog razloga."
+                elif count == 1:
+                    sector_note = f"Portfelj već ima 1 poziciju u {fund_sector} sektoru — napomeni diversifikacijski rizik."
+
             rec = analyze_stock(
                 fundamentals=data["fundamentals"],
                 score_result=data["score"],
@@ -335,6 +378,8 @@ def main():
                 do_not_sell_until=meta.get("do_not_sell_until"),
                 is_hidden_gem=is_gem,
                 sentiment_signal=sentiment_signals.get(ticker),
+                watchlist_context=watchlist_context,
+                sector_note=sector_note,
             )
             recommendations.append(rec)
             gem_label = " 💎" if is_gem else ""

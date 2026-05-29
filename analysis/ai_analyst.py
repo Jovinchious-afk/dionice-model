@@ -137,6 +137,8 @@ def analyze_stock(
     do_not_sell_until: str | None = None,
     is_hidden_gem: bool = False,
     sentiment_signal: dict | None = None,
+    watchlist_context: str | None = None,
+    sector_note: str | None = None,
 ) -> dict:
     """
     Analyzes a single stock and returns a structured recommendation dict.
@@ -163,6 +165,25 @@ def analyze_stock(
             earnings_block = f"\n⚠️ UPOZORENJE: Earnings za {earnings_days} dana ({earnings_date}) — VISOK rizik volatilnosti! Ne preporučaj BUY tik pred earnings osim s iznimno visokim uvjerenjem."
         elif 8 <= earnings_days <= 30:
             earnings_block = f"\nINFO: Earnings za {earnings_days} dana ({earnings_date}) — napomeni u thesis."
+
+    # 52-week position warning
+    week52_block = ""
+    week52_pos = fundamentals.get("week_52_position_pct")
+    if week52_pos is not None:
+        if week52_pos >= 85:
+            week52_block = f"\n⚠️ 52-TJEDNA POZICIJA: {week52_pos:.0f}% od godišnjeg vrha — dionica je blizu vrha, postavi konzervativniji buy_zone i manji position size."
+        elif week52_pos <= 15:
+            week52_block = f"\nINFO 52-tjedna pozicija: {week52_pos:.0f}% od godišnjeg vrha — dionica je blizu godišnjeg dna, potencijalna value kupnja ako su fundamentali solidni."
+
+    # Watchlist cross-check
+    watchlist_block = ""
+    if watchlist_context:
+        watchlist_block = f"\nWATCHLIST POVIJEST: {watchlist_context}"
+
+    # Sector concentration note
+    sector_block = ""
+    if sector_note:
+        sector_block = f"\nSEKTORSKA KONCENTRACIJA: {sector_note}"
 
     gem_context = ""
     if is_hidden_gem:
@@ -207,7 +228,7 @@ UPOZORENJE: Ne preporučuj SELL ili REDUCE bez iznimno jakog razloga koji direkt
     user_prompt = f"""Analiziraj ovu dionicu i vrati JSON preporuku NA HRVATSKOM JEZIKU (financijski termini mogu ostati na engleskom).
 
 DATUM: {current_date}
-{gem_context}{personal_context}{earnings_block}{sentiment_block}
+{gem_context}{personal_context}{earnings_block}{week52_block}{watchlist_block}{sector_block}{sentiment_block}
 
 FUNDAMENTALNI PODACI:
 {json.dumps(fundamentals, indent=2, default=str)}
