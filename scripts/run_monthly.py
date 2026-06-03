@@ -123,7 +123,15 @@ English language."""
         messages=[{"role": "user", "content": prompt}],
     )
 
-    return response.content[0].text
+    html = response.content[0].text.strip()
+    # Strip markdown code fences if Claude wrapped the HTML
+    if html.startswith("```"):
+        parts = html.split("```")
+        html = parts[1] if len(parts) > 1 else html
+        if html.startswith("html"):
+            html = html[4:]
+        html = html.strip()
+    return html
 
 
 def main():

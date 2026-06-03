@@ -2,11 +2,8 @@ name: Monthly Deep Report
 
 on:
   schedule:
-    # First Saturday of each month at 09:00 UTC
-    # GitHub Actions doesn't support "first Saturday" directly, so we run
-    # on days 1-7 on Saturdays. The script itself doesn't filter, so it
-    # will fire every Saturday in the first week of the month.
-    - cron: '0 9 1-7 * 6'
+    # 1st of every month at 09:00 UTC
+    - cron: '0 9 1 * *'
   workflow_dispatch:
 
 jobs:
