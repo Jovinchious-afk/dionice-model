@@ -359,7 +359,7 @@ elif page == "Watchlist":
         # Filter bar
         filter_action = st.radio(
             "Filter po akciji",
-            ["Sve", "BUY / ADD ON DIP", "WATCHLIST", "WAIT"],
+            ["Sve", "BUY / ADD ON DIP", "WATCHLIST", "WAIT", "🎯 Buy Zone Reached"],
             horizontal=True,
         )
         filter_map = {
@@ -367,7 +367,9 @@ elif page == "Watchlist":
             "WATCHLIST": ["WATCHLIST"],
             "WAIT": ["WAIT"],
         }
-        if filter_action != "Sve":
+        if filter_action == "🎯 Buy Zone Reached":
+            wl_df = wl_df[wl_df.get("buy_zone_reached_at").notna()] if "buy_zone_reached_at" in wl_df.columns else wl_df.iloc[0:0]
+        elif filter_action != "Sve":
             allowed = filter_map[filter_action]
             wl_df = wl_df[wl_df["action"].isin(allowed)]
 
@@ -391,14 +393,19 @@ elif page == "Watchlist":
                 except Exception:
                     pass
 
+                zone_reached = bool(row.get("buy_zone_reached_at"))
+
                 with st.container():
                     col1, col2, col3 = st.columns([2, 3, 2])
                     with col1:
-                        st.markdown(f"**{row.get('symbol', '')}**")
+                        badge = " 🎯" if zone_reached else ""
+                        st.markdown(f"**{row.get('symbol', '')}**{badge}")
                         st.caption(row.get("company_name", "") + age_label)
                         st.caption(f"Category: {row.get('category', 'N/A')}")
                     with col2:
                         st.markdown(f":{action_color}[{row.get('action', '')}] | Zone: {row.get('buy_zone', 'N/A')} | Target: {row.get('target_price', 'N/A')}")
+                        if zone_reached:
+                            st.caption(f"🎯 Buy zone reached {row.get('buy_zone_reached_at')} @ {format_price(row.get('buy_zone_reached_price'))}")
                         st.caption(f"Confidence: {row.get('confidence', 'N/A')}/10")
                         if row.get("thesis"):
                             st.caption(row["thesis"][:200])
@@ -501,6 +508,17 @@ elif page == "Decisions":
                 with col1:
                     st.markdown(f"**Agent action:** {row.get('agent_action','')}")
                     st.markdown(f"**Buy zone:** {row.get('agent_buy_zone','N/A')}")
+                    if row.get("agent_action") in ("BUY_BELOW", "ADD_ON_DIP"):
+                        reached_at = row.get("buy_zone_reached_at")
+                        if reached_at:
+                            st.markdown(f"**Buy zone reached:** ✅ {reached_at} @ {format_price(row.get('buy_zone_reached_price'))}")
+                        elif row.get("lowest_price_since_rec") is not None:
+                            st.markdown(
+                                f"**Buy zone reached:** ❌ Not yet — lowest since: "
+                                f"{format_price(row.get('lowest_price_since_rec'))} ({row.get('lowest_price_date','')})"
+                            )
+                        else:
+                            st.markdown("**Buy zone reached:** ⏳ Not checked yet")
                     st.markdown(f"**Confidence:** {row.get('agent_confidence','N/A')}/10")
                     st.markdown(f"**Price at rec:** {row.get('price_at_recommendation','N/A')}")
                     st.caption(f"Thesis: {(row.get('agent_thesis') or '')[:200]}")

@@ -1,12 +1,15 @@
 """
 Weekly job: fills price_30d/90d/180d for old decisions in Supabase, scores each
 checkpoint as correct/wrong (direction-aware per agent_action), writes a short
-AI retrospective explaining why, and auto-detects if the user actually followed
-the recommendation by cross-referencing the transactions log.
+AI retrospective explaining why, auto-detects if the user actually followed the
+recommendation by cross-referencing the transactions log, and checks whether a
+recommended buy zone has actually been reached since (on both decisions and
+watchlist).
 Runs every Monday via GitHub Actions.
 """
 
 import os
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -24,6 +27,8 @@ from analysis.supabase_client import get_supabase
 MODEL = "claude-haiku-4-5-20251001"
 CHECKPOINTS = [(30, "30d"), (90, "90d"), (180, "180d")]
 BEARISH_ACTIONS = {"SELL", "REDUCE"}
+BUY_ZONE_ACTIONS = {"BUY_BELOW", "ADD_ON_DIP"}
+BUY_ZONE_MAX_AGE_DAYS = 180  # only applies to `decisions` — watchlist is bounded by status=ACTIVE instead
 
 
 def get_current_price(ticker: str) -> float | None:
@@ -83,6 +88,111 @@ def load_transactions_by_symbol(client) -> dict[str, list[dict]]:
     for row in rows:
         by_symbol.setdefault(row.get("symbol", ""), []).append(row)
     return by_symbol
+
+
+def parse_buy_zone(buy_zone_text: str | None) -> float | None:
+    """Extracts a numeric threshold from free text like '< $135.00' or '< 128.00'."""
+    if not buy_zone_text:
+        return None
+    match = re.search(r"[\d,]+\.?\d*", buy_zone_text.replace("$", ""))
+    if not match:
+        return None
+    try:
+        return float(match.group().replace(",", ""))
+    except ValueError:
+        return None
+
+
+def check_buy_zone(ticker: str, buy_zone_text: str | None, since: datetime) -> dict | None:
+    """
+    Fetches daily closes since `since` and checks whether any close fell at/below
+    the parsed buy zone threshold. Always returns the lowest close seen since, even
+    if the zone itself was never reached, so "how close did it get" is visible too.
+    """
+    threshold = parse_buy_zone(buy_zone_text)
+    if threshold is None:
+        return None
+    try:
+        hist = yf.Ticker(ticker).history(start=since.strftime("%Y-%m-%d"), auto_adjust=True)
+        closes = hist["Close"].dropna()
+        if closes.empty:
+            return None
+    except Exception:
+        return None
+
+    lowest_price = float(closes.min())
+    lowest_date = closes.idxmin().strftime("%Y-%m-%d")
+
+    reached_at, reached_price = None, None
+    below_zone = closes[closes <= threshold]
+    if not below_zone.empty:
+        reached_at = below_zone.index[0].strftime("%Y-%m-%d")
+        reached_price = float(below_zone.iloc[0])
+
+    return {
+        "buy_zone_numeric": threshold,
+        "buy_zone_reached_at": reached_at,
+        "buy_zone_reached_price": reached_price,
+        "lowest_price_since_rec": round(lowest_price, 2),
+        "lowest_price_date": lowest_date,
+    }
+
+
+def update_decision_buy_zones(client, decisions: list[dict], now: datetime) -> None:
+    for dec in decisions:
+        if dec.get("agent_action") not in BUY_ZONE_ACTIONS or dec.get("buy_zone_reached_at"):
+            continue
+        rec_at_str = dec.get("recommended_at")
+        if not rec_at_str:
+            continue
+        try:
+            rec_at = datetime.fromisoformat(rec_at_str)
+            if rec_at.tzinfo is None:
+                rec_at = rec_at.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if (now - rec_at).days > BUY_ZONE_MAX_AGE_DAYS:
+            continue
+
+        info = check_buy_zone(dec.get("symbol", ""), dec.get("agent_buy_zone"), rec_at)
+        if not info:
+            continue
+        try:
+            client.table("decisions").update(info).eq("id", dec["id"]).execute()
+            print(f"[update_prices] Buy zone check {dec.get('symbol')} (decisions): {info}")
+        except Exception as exc:
+            print(f"[update_prices] Buy zone update failed for {dec.get('symbol')} ({dec['id']}): {exc}")
+
+
+def update_watchlist_buy_zones(client) -> None:
+    try:
+        result = client.table("watchlist").select("*").eq("status", "ACTIVE").execute()
+        rows = result.data or []
+    except Exception as exc:
+        print(f"[update_prices] Could not load watchlist: {exc}")
+        return
+
+    for row in rows:
+        if row.get("action") not in BUY_ZONE_ACTIONS or row.get("buy_zone_reached_at"):
+            continue
+        suggested_at_str = row.get("suggested_at")
+        if not suggested_at_str:
+            continue
+        try:
+            suggested_at = datetime.fromisoformat(suggested_at_str)
+            if suggested_at.tzinfo is None:
+                suggested_at = suggested_at.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+
+        info = check_buy_zone(row.get("symbol", ""), row.get("buy_zone"), suggested_at)
+        if not info:
+            continue
+        try:
+            client.table("watchlist").update(info).eq("id", row["id"]).execute()
+            print(f"[update_prices] Buy zone check {row.get('symbol')} (watchlist): {info}")
+        except Exception as exc:
+            print(f"[update_prices] Buy zone update failed for {row.get('symbol')} ({row['id']}): {exc}")
 
 
 def infer_followed(dec: dict, tx_by_symbol: dict, rec_at: datetime) -> bool:
@@ -157,6 +267,9 @@ def main():
                 print(f"[update_prices] Updated {ticker} (age {age_days}d): {list(updates.keys())}")
             except Exception as exc:
                 print(f"[update_prices] Update failed for {ticker} ({dec['id']}): {exc}")
+
+    update_decision_buy_zones(client, decisions, now)
+    update_watchlist_buy_zones(client)
 
     print("[update_prices] Done.")
 
