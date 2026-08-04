@@ -199,6 +199,12 @@ if page == "Portfolio":
             lambda v: round(v / total_value * 100, 1) if total_value and v is not None else None
         )
 
+        max_allocation = display["Allocation %"].max()
+        top_symbol = (
+            display.loc[display["Allocation %"].idxmax(), "Symbol"]
+            if pd.notna(max_allocation) else None
+        )
+
         # Summary metrics
         col1, col2, col3 = st.columns(3)
         col1.metric("Total Invested", f"${total_invested:,.2f}")
@@ -239,10 +245,11 @@ if page == "Portfolio":
             use_container_width=True, hide_index=True,
         )
 
-        if len(portfolio) == 1:
+        if top_symbol is not None and max_allocation >= 90:
             st.warning(
-                "⚠️ Portfolio is 100% concentrated in one stock. "
-                "Consider diversifying as new opportunities arise."
+                f"⚠️ {top_symbol} is {max_allocation:.1f}% of portfolio value. "
+                "This is single-stock concentration, not diversification — "
+                "consider whether new capacity should go elsewhere."
             )
 
     st.subheader("Transaction History")
@@ -428,7 +435,7 @@ elif page == "Decisions":
             except Exception:
                 pass
         if near_30d_count:
-            st.warning(f"🔔 {near_30d_count} preporuka je blizu 30-dnevne provjere — provjeri cijenu i ažuriraj outcome.")
+            st.info(f"🔔 {near_30d_count} preporuka je blizu 30-dnevne provjere — outcome se automatski ažurira ponedjeljkom.")
 
         st.subheader("All Decisions")
         for _, row in decisions_df.iterrows():
@@ -449,7 +456,7 @@ elif page == "Decisions":
 
             with st.expander(label):
                 if near_30d:
-                    st.warning("Ova preporuka je stara 25-35 dana. Provjeri trenutnu cijenu i upiši outcome_30d u Supabase.")
+                    st.info("Ova preporuka je stara 25-35 dana — outcome_30d se automatski upisuje idući ponedjeljak.")
                 col1, col2 = st.columns(2)
                 with col1:
                     st.markdown(f"**Agent action:** {row.get('agent_action','')}")
@@ -458,10 +465,15 @@ elif page == "Decisions":
                     st.markdown(f"**Price at rec:** {row.get('price_at_recommendation','N/A')}")
                     st.caption(f"Thesis: {(row.get('agent_thesis') or '')[:200]}")
                 with col2:
-                    st.markdown(f"**30d price:** {row.get('price_30d','Pending')}")
-                    st.markdown(f"**90d price:** {row.get('price_90d','Pending')}")
-                    st.markdown(f"**180d price:** {row.get('price_180d','Pending')}")
-                    st.markdown(f"**Outcome 30d:** {row.get('outcome_30d','pending')}")
+                    st.markdown(f"**30d price:** {row.get('price_30d','Pending')} — **{row.get('outcome_30d','pending')}**")
+                    st.markdown(f"**90d price:** {row.get('price_90d','Pending')} — **{row.get('outcome_90d','pending')}**")
+                    st.markdown(f"**180d price:** {row.get('price_180d','Pending')} — **{row.get('outcome_180d','pending')}**")
+
+                for suffix, checkpoint_label in [("30d", "30 dana"), ("90d", "90 dana"), ("180d", "180 dana")]:
+                    reasoning = row.get(f"outcome_reasoning_{suffix}")
+                    if reasoning:
+                        st.markdown(f"**Retrospektiva ({checkpoint_label}):**")
+                        st.caption(reasoning)
 
                 user_action = st.selectbox(
                     "Your action",
