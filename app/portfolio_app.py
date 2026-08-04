@@ -77,6 +77,15 @@ def load_newsletters(db) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def format_price(value) -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "Pending"
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return "Pending"
+
+
 def compute_portfolio(tx_df: pd.DataFrame) -> pd.DataFrame:
     """Aggregates transactions into current holdings."""
     if tx_df.empty:
@@ -465,9 +474,9 @@ elif page == "Decisions":
                     st.markdown(f"**Price at rec:** {row.get('price_at_recommendation','N/A')}")
                     st.caption(f"Thesis: {(row.get('agent_thesis') or '')[:200]}")
                 with col2:
-                    st.markdown(f"**30d price:** {row.get('price_30d','Pending')} — **{row.get('outcome_30d','pending')}**")
-                    st.markdown(f"**90d price:** {row.get('price_90d','Pending')} — **{row.get('outcome_90d','pending')}**")
-                    st.markdown(f"**180d price:** {row.get('price_180d','Pending')} — **{row.get('outcome_180d','pending')}**")
+                    st.markdown(f"**30d price:** {format_price(row.get('price_30d'))}")
+                    st.markdown(f"**90d price:** {format_price(row.get('price_90d'))}")
+                    st.markdown(f"**180d price:** {format_price(row.get('price_180d'))}")
 
                 for suffix, checkpoint_label in [("30d", "30 dana"), ("90d", "90 dana"), ("180d", "180 dana")]:
                     reasoning = row.get(f"outcome_reasoning_{suffix}")
@@ -483,9 +492,12 @@ elif page == "Decisions":
                     ),
                     key=f"ua_{row['id']}",
                 )
+                note_value = row.get("user_action_note")
+                if not isinstance(note_value, str):
+                    note_value = ""
                 user_note = st.text_input(
                     "Why? (optional)",
-                    value=row.get("user_action_note") or "",
+                    value=note_value,
                     key=f"un_{row['id']}",
                 )
                 if st.button("Save", key=f"save_{row['id']}"):
