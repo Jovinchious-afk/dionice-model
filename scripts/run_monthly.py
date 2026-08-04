@@ -119,9 +119,12 @@ English language."""
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=2000,
+        max_tokens=4000,
         messages=[{"role": "user", "content": prompt}],
     )
+
+    if response.stop_reason == "max_tokens":
+        print("[run_monthly] WARNING: response hit max_tokens — report may be truncated.")
 
     html = response.content[0].text.strip()
     # Strip markdown code fences if Claude wrapped the HTML
