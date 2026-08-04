@@ -271,6 +271,13 @@ def hard_exclude(fund: dict, category: str) -> tuple[bool, str]:
         if fcf_yield is not None and fcf_yield < -40.0:
             return True, f"FCF yield {fcf_yield:.1f}% < -40% (cash burning too fast)"
 
+        # Altman Z-Score < 1.81 = bankruptcy distress zone. Speculative_growth stocks
+        # are pre-profit by design and routinely score low here, so this check is
+        # skipped for that category — flagged as context in the AI prompt instead.
+        z = fund.get("altman_z_score")
+        if z is not None and z < 1.81:
+            return True, f"Altman Z-Score {z:.2f} < 1.81 (bankruptcy distress zone)"
+
     # Liquidity: lower threshold for speculative/small-cap (gems), stricter for main universe
     avg_vol = fund.get("avg_volume")
     vol_threshold = 10_000 if category == "speculative_growth" else 50_000

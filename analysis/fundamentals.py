@@ -45,7 +45,88 @@ def _safe_get(info: dict, key: str, default=None) -> Any:
     return val
 
 
-def fetch_fundamentals(ticker: str) -> dict:
+def _compute_altman_z(stock, market_cap: float | None) -> float | None:
+    """
+    Altman Z-Score (bankruptcy risk): Z > 2.99 safe, 1.81-2.99 grey, < 1.81 distress.
+    Needs balance sheet + income statement — returns None if any input is missing.
+    """
+    if not market_cap:
+        return None
+    try:
+        bs = stock.balance_sheet
+        inc = stock.financials
+        if bs.empty or inc.empty:
+            return None
+        col_bs, col_inc = bs.columns[0], inc.columns[0]
+
+        def _get(df, col, label):
+            if label not in df.index:
+                return None
+            val = df.loc[label, col]
+            return None if val != val else float(val)  # NaN check
+
+        wc = _get(bs, col_bs, "Working Capital")
+        ta = _get(bs, col_bs, "Total Assets")
+        re = _get(bs, col_bs, "Retained Earnings")
+        tl = _get(bs, col_bs, "Total Liabilities Net Minority Interest")
+        rev = _get(inc, col_inc, "Total Revenue")
+        ebit = _get(inc, col_inc, "EBIT")
+
+        if None in (wc, ta, re, tl, rev, ebit) or not ta or not tl:
+            return None
+
+        z = 1.2 * (wc / ta) + 1.4 * (re / ta) + 3.3 * (ebit / ta) + 0.6 * (market_cap / tl) + 1.0 * (rev / ta)
+        return round(z, 2)
+    except Exception:
+        return None
+
+
+def _compute_relative_strength(stock, spy_return_6m: float | None) -> float | None:
+    """Own 6-month return minus S&P 500's 6-month return, in percentage points."""
+    if spy_return_6m is None:
+        return None
+    try:
+        closes = stock.history(period="6mo", auto_adjust=True)["Close"].dropna()
+        if len(closes) < 2:
+            return None
+        start, end = float(closes.iloc[0]), float(closes.iloc[-1])
+        if start <= 0:
+            return None
+        own_return = (end - start) / start * 100
+        return round(own_return - spy_return_6m, 1)
+    except Exception:
+        return None
+
+
+def _fetch_news_headlines(stock, limit: int = 3) -> list[str]:
+    try:
+        news = stock.news or []
+        headlines = []
+        for item in news[:limit]:
+            content = item.get("content", item)
+            title = content.get("title")
+            if title:
+                headlines.append(title)
+        return headlines
+    except Exception:
+        return []
+
+
+def get_spy_return_6m() -> float | None:
+    """Fetches the S&P 500's 6-month return once per batch, for relative-strength comparisons."""
+    try:
+        closes = yf.Ticker("SPY").history(period="6mo", auto_adjust=True)["Close"].dropna()
+        if len(closes) < 2:
+            return None
+        start, end = float(closes.iloc[0]), float(closes.iloc[-1])
+        if start <= 0:
+            return None
+        return round((end - start) / start * 100, 1)
+    except Exception:
+        return None
+
+
+def fetch_fundamentals(ticker: str, spy_return_6m: float | None = None) -> dict:
     """
     Returns fundamental metrics for a ticker.
     Uses cache if data is <24h old; fetches from yfinance otherwise.
@@ -152,6 +233,11 @@ def fetch_fundamentals(ticker: str) -> dict:
         except Exception:
             pass
 
+        # --- New signals: bankruptcy risk, momentum, news ---
+        altman_z_score = _compute_altman_z(stock, market_cap)
+        relative_strength_6m = _compute_relative_strength(stock, spy_return_6m)
+        news_headlines = _fetch_news_headlines(stock)
+
         data = {
             "symbol": symbol,
             "name": _safe_get(info, "longName", symbol),
@@ -211,6 +297,10 @@ def fetch_fundamentals(ticker: str) -> dict:
             # Earnings calendar
             "next_earnings_date": next_earnings_date,
             "next_earnings_days": next_earnings_days,
+            # New signals
+            "altman_z_score": altman_z_score,
+            "relative_strength_6m": relative_strength_6m,
+            "news_headlines": news_headlines,
             # Metadata
             "fetch_error": None,
             "cached": False,
@@ -240,8 +330,9 @@ def fetch_multiple(tickers: list[str], delay_seconds: float = 1.0) -> dict[str, 
     Fetches fundamentals for a list of tickers with a polite delay between requests.
     Returns a dict keyed by ticker symbol.
     """
+    spy_return_6m = get_spy_return_6m()
     results = {}
     for ticker in tickers:
-        results[ticker.upper()] = fetch_fundamentals(ticker)
+        results[ticker.upper()] = fetch_fundamentals(ticker, spy_return_6m=spy_return_6m)
         time.sleep(delay_seconds)
     return results

@@ -3,6 +3,7 @@ Dionice Portfolio Tracker — Streamlit app (5 pages)
 Hosted on Streamlit Community Cloud (requires public GitHub repo)
 """
 
+import json
 import os
 from datetime import datetime, timezone, timedelta
 
@@ -64,6 +65,15 @@ def load_decisions(db) -> pd.DataFrame:
     except Exception as e:
         st.error(f"Failed to load decisions: {e}")
         return pd.DataFrame()
+
+
+def load_latest_lessons(db) -> dict | None:
+    try:
+        result = db.table("model_lessons").select("*").order("generated_at", desc=True).limit(1).execute()
+        rows = result.data or []
+        return rows[0] if rows else None
+    except Exception:
+        return None
 
 
 def load_newsletters(db) -> pd.DataFrame:
@@ -392,6 +402,20 @@ elif page == "Watchlist":
                         st.caption(f"Confidence: {row.get('confidence', 'N/A')}/10")
                         if row.get("thesis"):
                             st.caption(row["thesis"][:200])
+                        evidence = row.get("evidence_json") or {}
+                        if isinstance(evidence, str):
+                            try:
+                                evidence = json.loads(evidence)
+                            except Exception:
+                                evidence = {}
+                        signal_bits = [
+                            f"Altman Z: {evidence['altman_z_score']}" if evidence.get("altman_z_score") not in (None, "N/A") else None,
+                            f"Rel. snaga (6mj): {evidence['relative_strength_6m']}" if evidence.get("relative_strength_6m") not in (None, "N/A") else None,
+                            f"Insider: {evidence['insider_signal']}" if evidence.get("insider_signal") not in (None, "N/A") else None,
+                        ]
+                        signal_bits = [b for b in signal_bits if b]
+                        if signal_bits:
+                            st.caption(" | ".join(signal_bits))
                     with col3:
                         new_status = st.selectbox(
                             "Update status",
@@ -412,6 +436,13 @@ elif page == "Watchlist":
 elif page == "Decisions":
     st.title("Decision Log")
     st.caption("Track what the AI recommended vs what you did. Used for backtesting quality.")
+
+    lessons = load_latest_lessons(db)
+    if lessons:
+        period = lessons.get("period_label", "")
+        n = lessons.get("decisions_analyzed", 0)
+        with st.expander(f"🧠 Naučene lekcije ({period}, {n} preporuka analizirano)", expanded=False):
+            st.markdown(lessons.get("lessons_text", ""))
 
     decisions_df = load_decisions(db)
 
@@ -527,7 +558,6 @@ elif page == "Newsletteri":
             nl_type = row.get("type", "WEEKLY")
             content = row.get("content_json") or {}
             if isinstance(content, str):
-                import json
                 try:
                     content = json.loads(content)
                 except Exception:

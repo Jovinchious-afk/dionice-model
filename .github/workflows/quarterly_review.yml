@@ -1,15 +1,15 @@
-name: Monthly Deep Report
+name: Quarterly Self-Review
 
 on:
   schedule:
-    # 1st of every month at 09:00 UTC
-    - cron: '0 9 1 * *'
+    # 1st of Jan/Apr/Jul/Oct at 09:00 UTC
+    - cron: '0 9 1 1,4,7,10 *'
   workflow_dispatch:
 
 jobs:
-  monthly-report:
+  quarterly-review:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -26,13 +26,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run monthly report
+      - name: Run quarterly self-review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
-        run: python scripts/run_monthly.py
+        run: python scripts/run_quarterly_review.py

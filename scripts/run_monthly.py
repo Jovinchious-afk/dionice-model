@@ -39,6 +39,20 @@ def get_all_decisions_from_supabase() -> list[dict]:
         return []
 
 
+def get_latest_lessons() -> str | None:
+    """Fetches the most recent quarterly self-review lessons text, if any."""
+    client = get_supabase()
+    if not client:
+        return None
+    try:
+        result = client.table("model_lessons").select("*").order("generated_at", desc=True).limit(1).execute()
+        rows = result.data or []
+        return rows[0]["lessons_text"] if rows else None
+    except Exception as exc:
+        print(f"[run_monthly] Could not load model_lessons: {exc}")
+        return None
+
+
 def get_portfolio_from_supabase() -> tuple[list[dict], str]:
     client = get_supabase()
     if not client:
@@ -75,6 +89,7 @@ def generate_monthly_report(
     scored_map: dict,
     decisions: list[dict],
     date_str: str,
+    lessons_text: str | None = None,
 ) -> str:
     """
     Uses Claude to generate a deep monthly HTML report.
@@ -100,11 +115,14 @@ def generate_monthly_report(
             "revenue_growth_yoy": fund.get("revenue_growth_yoy"),
         })
 
+    lessons_block = f"\nQUARTERLY SELF-REVIEW LESSONS (apply these when judging thesis quality):\n{lessons_text}\n" if lessons_text else ""
+
     prompt = f"""Generate a monthly portfolio deep-dive report for a small retail investor (Croatia, Revolut Basic, 300-400 EUR/month).
 
 DATE: {date_str}
 PORTFOLIO POSITIONS: {positions_summary}
 RECENT AGENT DECISIONS (last 50): {decisions[:20]}
+{lessons_block}
 
 Write a comprehensive HTML report covering:
 1. Portfolio overview: current composition, total value estimate, sector concentration
@@ -159,9 +177,10 @@ def main():
             scored_map[ticker] = {"total_score": score["total_score"], "category": category}
 
     decisions = get_all_decisions_from_supabase()
+    lessons_text = get_latest_lessons()
 
     print("[run_monthly] Generating monthly report...")
-    html_report = generate_monthly_report(positions, fundamentals_map, scored_map, decisions, date_str)
+    html_report = generate_monthly_report(positions, fundamentals_map, scored_map, decisions, date_str, lessons_text)
 
     month_name = today.strftime("%B %Y")
     subject = f"[Dionice] Monthly Deep Report — {month_name}"

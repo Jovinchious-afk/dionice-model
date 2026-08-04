@@ -124,6 +124,11 @@ SIGNALI ZA PRODAJU (preporuči SELL ili REDUCE samo ako):
 - Dividenda se reže
 - Zalihe rastu puno brže od prodaje
 
+DODATNI SIGNALI U FUNDAMENTALNIM PODACIMA (automatski izračunati, ne moraš ih sam procjenjivati):
+- altman_z_score: Altman Z-Score (rizik bankrota). Z > 2.99 sigurno, 1.81-2.99 sivo, < 1.81 distress zona. Za speculative_growth kategoriju nizak Z je uobičajen (rana faza, još nije profitabilna) — ne penaliziraj automatski, ali spomeni u red_flags ako je ekstremno nizak (< 0).
+- relative_strength_6m: Performanse dionice minus S&P 500 performanse u zadnjih 6 mjeseci, u postotnim poenima. Pozitivno = nadmašuje tržište (momentum u prilog), negativno = zaostaje.
+- news_headlines: nedavni naslovi vijesti (yfinance) — nisu nužno svi relevantni za ovu dionicu specifično, procijeni sam ton i relevantnost.
+
 OUTPUT FORMAT: Vraćaj SAMO valjani JSON, bez markdowna, bez teksta izvan JSONa.
 Svi tekstualni opisi (thesis, catalyst, downside_scenario, itd.) MORAJU biti na HRVATSKOM jeziku.
 
@@ -135,6 +140,7 @@ def analyze_stock(
     score_result: dict,
     reddit_signal: dict | None,
     congress_signal: dict | None,
+    insider_signal: dict | None,
     portfolio_context: str,
     current_date: str,
     personal_thesis: str | None = None,
@@ -146,6 +152,7 @@ def analyze_stock(
     sector_note: str | None = None,
     macro_context: str | None = None,
     portfolio_value_eur: float | None = None,
+    lessons_context: str | None = None,
 ) -> dict:
     """
     Analyzes a single stock and returns a structured recommendation dict.
@@ -155,6 +162,12 @@ def analyze_stock(
     hype_score = (reddit_signal or {}).get("hype_score", 0)
     congress_buys = (congress_signal or {}).get("buy_count", 0)
     congress_sells = (congress_signal or {}).get("sell_count", 0)
+
+    # Real SEC Form 4 insider signal (open-market buys/sells only)
+    if insider_signal:
+        _f_insider = insider_signal.get("note", "")
+    else:
+        _f_insider = "Nema insider Form 4 aktivnosti u zadnjih 14 dana"
 
     # StockTwits sentiment block
     sentiment_block = ""
@@ -196,6 +209,11 @@ def analyze_stock(
     macro_block = ""
     if macro_context:
         macro_block = f"\n{macro_context}"
+
+    # Quarterly self-review lessons (calibration notes from past decisions)
+    lessons_block = ""
+    if lessons_context:
+        lessons_block = f"\nNAUČENE LEKCIJE IZ PROŠLIH PREPORUKA (kvartalni self-review):\n{lessons_context}"
 
     # Dynamic position size ranges based on actual portfolio value
     if portfolio_value_eur and portfolio_value_eur > 0:
@@ -258,6 +276,7 @@ UPOZORENJE: Ne preporučuj SELL ili REDUCE bez iznimno jakog razloga koji direkt
 
 DATUM: {current_date}
 {macro_block}
+{lessons_block}
 {pos_size_guide}
 {gem_context}{personal_context}{earnings_block}{week52_block}{watchlist_block}{sector_block}{sentiment_block}
 
@@ -277,6 +296,9 @@ CONGRESS TRADES (last 14 days — weak signal):
 - Members buying: {congress_buys}
 - Members selling: {congress_sells}
 - Note: {(congress_signal or {}).get('note', 'No recent congress trades')}
+
+INSIDER TRADING (SEC Form 4, open-market buy/sell only, last 14 days — fresher and stronger signal than Congress, 2-day disclosure lag):
+- {_f_insider}
 
 INVESTOR PORTFOLIO CONTEXT:
 {portfolio_context}
@@ -315,6 +337,8 @@ Return ONLY this JSON structure (no markdown, no text outside JSON):
     "congress_signal": "Weak — {congress_buys} buy(s), {congress_sells} sell(s)",
     "stocktwits": "{_f_st}",
     "earnings_in": "{_f_earn}",
+    "altman_z_score": "<from fundamentals data or N/A>",
+    "relative_strength_6m": "<from fundamentals data or N/A>",
     "fundamental_score": "{score_result.get('total_score', 0)}/100",
     "confidence": "<same as confidence above>/10"
   }}
@@ -326,6 +350,8 @@ Return ONLY this JSON structure (no markdown, no text outside JSON):
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
     )
+    if response.stop_reason == "max_tokens":
+        print(f"[ai_analyst] WARNING: analyze_stock hit max_tokens for {fundamentals.get('symbol')} — response may be truncated.")
 
     raw_text = response.content[0].text.strip()
 
@@ -351,10 +377,15 @@ Return ONLY this JSON structure (no markdown, no text outside JSON):
 
     result["is_hidden_gem"] = is_hidden_gem
 
-    # Override evidence_table fields we control — prevents Claude from mangling them
+    # Override evidence_table fields we control — real data instead of Claude's guess
     ev = result.setdefault("evidence_table", {})
     ev["stocktwits"] = _f_st
     ev["earnings_in"] = _f_earn
+    ev["insider_signal"] = _f_insider
+    altman_z = fundamentals.get("altman_z_score")
+    ev["altman_z_score"] = f"{altman_z:.2f}" if altman_z is not None else "N/A"
+    rel_strength = fundamentals.get("relative_strength_6m")
+    ev["relative_strength_6m"] = f"{rel_strength:+.1f}pp" if rel_strength is not None else "N/A"
 
     # Hard override: hype block (Reddit or StockTwits)
     effective_hype = max((reddit_signal or {}).get("hype_score", 0), sentiment_hype)
@@ -437,6 +468,8 @@ Vrati SAMO valjani JSON (bez markdowna, bez teksta izvan JSONa):
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
     )
+    if response.stop_reason == "max_tokens":
+        print("[ai_analyst] WARNING: generate_weekly_summary hit max_tokens — response may be truncated.")
 
     raw_text = response.content[0].text.strip()
     if raw_text.startswith("```"):

@@ -1,5 +1,7 @@
 """
-Fetches key macro indicators using yfinance (no API key, no extra cost).
+Fetches key macro indicators using yfinance (no API key, no extra cost),
+plus CPI/unemployment from FRED if FRED_API_KEY is set (free key, optional —
+degrades gracefully to yfinance-only context if absent).
 Used to give Claude market-wide context before stock analysis.
 
 Indicators:
@@ -7,8 +9,11 @@ Indicators:
   ^TNX   — 10-year US Treasury yield (growth vs value rotation)
   ^VIX   — Fear index (risk-on vs risk-off)
   DX-Y.NYB — USD Dollar Index (strong USD hurts multinationals)
+  CPIAUCSL (FRED) — inflation, YoY %
+  UNRATE (FRED)   — unemployment rate
 """
 
+import os
 from datetime import datetime, timezone
 import yfinance as yf
 
@@ -27,6 +32,38 @@ def _pct(current: float, reference: float) -> float:
     return (current - reference) / reference * 100
 
 
+def _fetch_fred_indicators() -> dict:
+    """Optional: CPI YoY + unemployment rate from FRED. Skipped if FRED_API_KEY isn't set."""
+    api_key = os.environ.get("FRED_API_KEY")
+    if not api_key:
+        return {}
+
+    results: dict = {}
+    try:
+        from fredapi import Fred
+        fred = Fred(api_key=api_key)
+    except Exception:
+        return results
+
+    try:
+        cpi = fred.get_series("CPIAUCSL").dropna()
+        if len(cpi) >= 13:
+            latest, year_ago = float(cpi.iloc[-1]), float(cpi.iloc[-13])
+            if year_ago:
+                results["CPIAUCSL"] = {"name": "CPI (inflacija YoY)", "yoy_pct": _pct(latest, year_ago)}
+    except Exception:
+        pass
+
+    try:
+        unrate = fred.get_series("UNRATE").dropna()
+        if len(unrate) >= 1:
+            results["UNRATE"] = {"name": "Nezaposlenost", "current": float(unrate.iloc[-1])}
+    except Exception:
+        pass
+
+    return results
+
+
 def fetch_macro_context() -> dict:
     """
     Returns a dict with current values and 1-month changes for each indicator.
@@ -37,11 +74,11 @@ def fetch_macro_context() -> dict:
     for symbol, name in INDICATORS.items():
         try:
             ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="1mo", auto_adjust=True)
-            if hist.empty:
+            closes = ticker.history(period="1mo", auto_adjust=True)["Close"].dropna()
+            if len(closes) < 2:
                 continue
-            current = float(hist["Close"].iloc[-1])
-            month_ago = float(hist["Close"].iloc[0])
+            current = float(closes.iloc[-1])
+            month_ago = float(closes.iloc[0])
             results[symbol] = {
                 "name": name,
                 "current": current,
@@ -53,13 +90,14 @@ def fetch_macro_context() -> dict:
     # YTD change for S&P 500
     try:
         year_start = f"{datetime.now(timezone.utc).year}-01-01"
-        sp_ytd = yf.Ticker("^GSPC").history(start=year_start, auto_adjust=True)
-        if not sp_ytd.empty and "^GSPC" in results:
-            ytd_start = float(sp_ytd["Close"].iloc[0])
+        sp_closes = yf.Ticker("^GSPC").history(start=year_start, auto_adjust=True)["Close"].dropna()
+        if len(sp_closes) >= 2 and "^GSPC" in results:
+            ytd_start = float(sp_closes.iloc[0])
             results["^GSPC"]["change_ytd_pct"] = _pct(results["^GSPC"]["current"], ytd_start)
     except Exception:
         pass
 
+    results.update(_fetch_fred_indicators())
     return results
 
 
@@ -108,6 +146,18 @@ def format_macro_for_prompt(macro: dict) -> str:
             "slab USD → pozitivno za multinacionalne" if dxy["change_1m_pct"] < -1 else "stabilan USD"
         )
         lines.append(f"  USD indeks: {d:.1f} ({dxy['change_1m_pct']:+.1f}% ovaj mjes.) — {interp}")
+
+    cpi = macro.get("CPIAUCSL", {})
+    if cpi:
+        yoy = cpi["yoy_pct"]
+        interp = "iznad Fed cilja od 2% → pritisak na kamate" if yoy > 3 else "blizu Fed cilja → povoljno za rizičnu imovinu"
+        lines.append(f"  CPI (inflacija): {yoy:+.1f}% YoY — {interp}")
+
+    unrate = macro.get("UNRATE", {})
+    if unrate:
+        u = unrate["current"]
+        interp = "raste → rizik usporavanja potrošnje" if u > 5 else "nisko → snažno tržište rada"
+        lines.append(f"  Nezaposlenost: {u:.1f}% — {interp}")
 
     lines.append(
         "  → Uzmi makro kontekst u obzir pri svakoj preporuci: "

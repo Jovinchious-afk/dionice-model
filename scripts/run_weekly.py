@@ -19,6 +19,7 @@ load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from analysis.congress_tracker import get_congress_signals, get_tickers_from_congress
+from analysis.insider_tracker import get_insider_signals_batch
 from analysis.reddit_tracker import get_tickers_from_reddit, scrape_reddit
 from analysis.fundamentals import fetch_multiple
 from analysis.scorer import score_stock, classify_category, hard_exclude
@@ -30,6 +31,17 @@ from analysis.macro_context import fetch_macro_context, format_macro_for_prompt
 from analysis.supabase_client import get_supabase
 
 GEM_PRICE_CAP = 12.0  # hidden gems must be under this price to pass through
+
+
+def get_latest_lessons(client) -> str | None:
+    """Fetches the most recent quarterly self-review lessons text, if any."""
+    try:
+        result = client.table("model_lessons").select("*").order("generated_at", desc=True).limit(1).execute()
+        rows = result.data or []
+        return rows[0]["lessons_text"] if rows else None
+    except Exception as exc:
+        print(f"[run_weekly] Could not load model_lessons: {exc}")
+        return None
 
 
 def get_active_watchlist(client) -> dict[str, dict]:
@@ -212,6 +224,10 @@ def main():
     active_watchlist = get_active_watchlist(db_client) if db_client else {}
     print(f"[run_weekly] Active watchlist: {list(active_watchlist.keys())}")
 
+    lessons_text = get_latest_lessons(db_client) if db_client else None
+    if lessons_text:
+        print("[run_weekly] Loaded quarterly self-review lessons")
+
     # 1b. Macro context (yfinance, free)
     print("[run_weekly] Fetching macro context...")
     macro_data = {}
@@ -267,6 +283,14 @@ def main():
         congress_signals = get_congress_signals(days_back=14)
     except Exception as exc:
         print(f"[run_weekly] Congress fetch failed: {exc}")
+
+    # 5b. Insider (SEC Form 4) signals — fresher signal than Congress, 2-day lag
+    print("[run_weekly] Fetching insider trading signals...")
+    insider_signals = {}
+    try:
+        insider_signals = get_insider_signals_batch(all_candidates, days_back=14)
+    except Exception as exc:
+        print(f"[run_weekly] Insider fetch failed (non-critical): {exc}")
 
     # 6. Fetch fundamentals for all candidates
     print("[run_weekly] Fetching fundamentals (this may take 2-3 minutes)...")
@@ -398,6 +422,7 @@ def main():
                 score_result=data["score"],
                 reddit_signal=reddit_signals.get(ticker),
                 congress_signal=congress_signals.get(ticker),
+                insider_signal=insider_signals.get(ticker),
                 portfolio_context=portfolio_context,
                 current_date=date_str,
                 personal_thesis=meta.get("personal_thesis"),
@@ -408,6 +433,7 @@ def main():
                 watchlist_context=watchlist_context,
                 sector_note=sector_note,
                 macro_context=macro_text,
+                lessons_context=lessons_text,
                 portfolio_value_eur=portfolio_value_eur,
             )
             recommendations.append(rec)
