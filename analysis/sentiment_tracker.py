@@ -1,6 +1,6 @@
 """
 StockTwits public sentiment API — no authentication required.
-Replaces Reddit (which blocks GitHub Actions with 403).
+Sole source of the hype signal: hype_score >= 7 blocks BUY in ai_analyst.py.
 Returns bullish/bearish ratio and hype score per ticker.
 """
 

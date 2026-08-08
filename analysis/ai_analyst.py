@@ -1,6 +1,6 @@
 """
-AI analyst module: synthesizes fundamental scores, Reddit signals, and Congress trades
-into actionable stock recommendations using Claude claude-haiku-4-5-20251001.
+AI analyst module: synthesizes fundamental scores, StockTwits sentiment, insider and
+Congress activity into actionable stock recommendations using claude-haiku-4-5.
 Every recommendation is compared against "do nothing / hold cash / add to best position".
 """
 
@@ -86,7 +86,7 @@ OSNOVNA FILOZOFIJA:
 - Dosadni, profitabilni i podcijenjeni biznisi ispred hype-a
 - Svaka preporuka mora biti bolja od "ne raditi ništa" ili "povećati najboljuu postojeću poziciju"
 - "Nema kupnje ovaj tjedan" je validan i čest output — nije neuspjeh
-- Reddit hype je anti-signal: ako je hype_score >= 7, maksimalna akcija je WATCHLIST, nikad BUY
+- Hype je anti-signal: ako je hype_score >= 7 (StockTwits), maksimalna akcija je WATCHLIST, nikad BUY
 - Kongresne kupnje/prodaje su slabi signali — samo izvor ideja (prijave kasne 30-45 dana)
 - VAŽNO: Ako ulagač ima osobnu tezu za postojeću poziciju (geopolitika, sektorski trendovi), POŠTUJ tu tezu — ne preporučuj SELL bez iznimno jakog razloga
 
@@ -138,7 +138,6 @@ PISMO: Koristi ISKLJUČIVO latinična slova (a-z, A-Z, hrvatska dijakritika: č,
 def analyze_stock(
     fundamentals: dict,
     score_result: dict,
-    reddit_signal: dict | None,
     congress_signal: dict | None,
     insider_signal: dict | None,
     portfolio_context: str,
@@ -159,7 +158,6 @@ def analyze_stock(
     """
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
-    hype_score = (reddit_signal or {}).get("hype_score", 0)
     congress_buys = (congress_signal or {}).get("buy_count", 0)
     congress_sells = (congress_signal or {}).get("sell_count", 0)
 
@@ -286,12 +284,6 @@ FUNDAMENTALNI PODACI:
 FUNDAMENTAL SCORE: {score_result.get('total_score', 0)}/100 (category: {score_result.get('category', 'unknown')})
 Score breakdown: {json.dumps(score_result.get('breakdown', {}), indent=2)}
 
-REDDIT SIGNAL:
-- Hype score: {hype_score}/10
-- Mentions (48h): {(reddit_signal or {}).get('mention_count', 0)}
-- Posts with fundamental analysis: {(reddit_signal or {}).get('posts_with_fa', 0)}
-- Verdict: {(reddit_signal or {}).get('verdict', 'No data')}
-
 CONGRESS TRADES (last 14 days — weak signal):
 - Members buying: {congress_buys}
 - Members selling: {congress_sells}
@@ -312,14 +304,14 @@ Return ONLY this JSON structure (no markdown, no text outside JSON):
   "buy_zone": "<e.g. '< $25.00' or 'N/A'>",
   "target_price": "<e.g. '$32.00' or 'N/A'>",
   "position_size": "<npr. 'mala (3-5% / €500-750)' ili 'normalna (7-10% / €1.050-1.500)' ili 'velika (12-20% / €2.000-3.000)' — koristi stvarne iznose iz VELIČINA POZICIJE gore>",
-  "business_explanation": "<2-3 sentences explaining what the company does and how it makes money>",
-  "investment_thesis": "<max 5 sentences: why this stock, why now>",
-  "valuation_verdict": "<cheap/fair/expensive vs sector with 2-3 key numbers>",
-  "catalyst": "<what specific event or trend could unlock value in 6-18 months>",
-  "downside_scenario": "<what must go wrong to lose 30-50% — be specific>",
-  "vs_cash_alternative": "<is this better than doing nothing? Better than adding to existing best position? Explain in 2 sentences>",
-  "thesis_breakers": ["<uvjet 1 koji bi poništio tezu — kratko>", "<uvjet 2>", "<uvjet 3>"],
-  "red_flags": ["<list of 1-3 specific concerns>"],
+  "business_explanation": "<2 sentences: what the company does and how it makes money>",
+  "investment_thesis": "<max 3 sentences: why this stock, why now>",
+  "valuation_verdict": "<cheap/fair/expensive vs sector with 2-3 key numbers, 1 sentence>",
+  "catalyst": "<specific event or trend that could unlock value in 6-18 months, 1 sentence>",
+  "downside_scenario": "<what must go wrong to lose 30-50% — specific, 1-2 sentences>",
+  "vs_cash_alternative": "<better than doing nothing / than adding to best existing position? 1-2 sentences>",
+  "thesis_breakers": ["<uvjet 1 koji bi poništio tezu — kratko>", "<uvjet 2>"],
+  "red_flags": ["<1-3 specific concerns, each a short phrase>"],
   "hype_override": <true if hype_score >= 7 forced downgrade>,
   "confidence": <integer 1-10>,
   "revolut_available": true,
@@ -344,9 +336,11 @@ Return ONLY this JSON structure (no markdown, no text outside JSON):
   }}
 }}"""
 
+    # Complete responses measured at 1261-1841 output tokens (2026-08-08, 5 tickers).
+    # 1500 truncated almost every call, which silently became NO_ACTION/confidence 0.
     response = client.messages.create(
         model=MODEL,
-        max_tokens=1500,
+        max_tokens=2500,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
     )
@@ -387,8 +381,8 @@ Return ONLY this JSON structure (no markdown, no text outside JSON):
     rel_strength = fundamentals.get("relative_strength_6m")
     ev["relative_strength_6m"] = f"{rel_strength:+.1f}pp" if rel_strength is not None else "N/A"
 
-    # Hard override: hype block (Reddit or StockTwits)
-    effective_hype = max((reddit_signal or {}).get("hype_score", 0), sentiment_hype)
+    # Hard override: hype block (StockTwits)
+    effective_hype = sentiment_hype
     if effective_hype >= 7:
         if result.get("action") in ("BUY_BELOW", "ADD_ON_DIP"):
             result["action"] = "WATCHLIST"

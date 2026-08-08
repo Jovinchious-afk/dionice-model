@@ -125,7 +125,6 @@ def sample_hidden_gems(n: int = 5, dt: datetime | None = None) -> list[str]:
 
 def select_candidates(
     portfolio_tickers: list[str],
-    reddit_tickers: list[str],
     congress_tickers: list[str],
     dt: datetime | None = None,
     max_main: int = 8,
@@ -137,7 +136,7 @@ def select_candidates(
     Returns (main_candidates, gem_candidates) as separate lists so
     run_weekly.py can apply different scoring rules and mark gems distinctly.
 
-    main_candidates: portfolio positions (always) + universe sample + top Reddit/Congress
+    main_candidates: portfolio positions (always) + universe sample + top Congress
     gem_candidates:  hidden gems sample (price filter applied after fundamentals fetch)
 
     Total stocks sent to fetch_multiple() = len(main) + len(gems) ≤ max_main + max_gems
@@ -155,12 +154,9 @@ def select_candidates(
         if len(main) >= max_main + len(portfolio_tickers):
             break
 
-    # Append top Reddit/Congress signals (max 2 each) as bonus candidates
-    bonus_reddit = [t for t in reddit_tickers if t not in main][:2]
-    bonus_congress = [t for t in congress_tickers if t not in main and t not in bonus_reddit][:2]
-    for ticker in bonus_reddit + bonus_congress:
-        if ticker not in main:
-            main.append(ticker)
+    # Append top Congress signals (max 2) as bonus candidates
+    for ticker in [t for t in congress_tickers if t not in main][:2]:
+        main.append(ticker)
 
     # Gem candidates are kept separate
     gems = sample_hidden_gems(n=max_gems, dt=now)

@@ -87,8 +87,24 @@ def load_newsletters(db) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def has_value(value) -> bool:
+    """
+    True only when a Supabase column actually holds something. pandas turns SQL
+    NULL into float NaN, and bool(NaN) is True — so a plain truthiness check
+    reports empty columns as filled.
+    """
+    if value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip() not in ("", "None", "nan", "NaT")
+
+
 def format_price(value) -> str:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
+    if not has_value(value):
         return "Pending"
     try:
         return f"{float(value):.2f}"
@@ -393,7 +409,7 @@ elif page == "Watchlist":
                 except Exception:
                     pass
 
-                zone_reached = bool(row.get("buy_zone_reached_at"))
+                zone_reached = has_value(row.get("buy_zone_reached_at"))
 
                 with st.container():
                     col1, col2, col3 = st.columns([2, 3, 2])
@@ -510,9 +526,9 @@ elif page == "Decisions":
                     st.markdown(f"**Buy zone:** {row.get('agent_buy_zone','N/A')}")
                     if row.get("agent_action") in ("BUY_BELOW", "ADD_ON_DIP"):
                         reached_at = row.get("buy_zone_reached_at")
-                        if reached_at:
+                        if has_value(reached_at):
                             st.markdown(f"**Buy zone reached:** ✅ {reached_at} @ {format_price(row.get('buy_zone_reached_price'))}")
-                        elif row.get("lowest_price_since_rec") is not None:
+                        elif has_value(row.get("lowest_price_since_rec")):
                             st.markdown(
                                 f"**Buy zone reached:** ❌ Not yet — lowest since: "
                                 f"{format_price(row.get('lowest_price_since_rec'))} ({row.get('lowest_price_date','')})"
@@ -541,9 +557,8 @@ elif page == "Decisions":
                     ),
                     key=f"ua_{row['id']}",
                 )
-                note_value = row.get("user_action_note")
-                if not isinstance(note_value, str):
-                    note_value = ""
+                raw_note = row.get("user_action_note")
+                note_value = str(raw_note) if has_value(raw_note) else ""
                 user_note = st.text_input(
                     "Why? (optional)",
                     value=note_value,

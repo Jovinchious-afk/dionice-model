@@ -20,7 +20,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from analysis.congress_tracker import get_congress_signals, get_tickers_from_congress
 from analysis.insider_tracker import get_insider_signals_batch
-from analysis.reddit_tracker import get_tickers_from_reddit, scrape_reddit
 from analysis.fundamentals import fetch_multiple
 from analysis.scorer import score_stock, classify_category, hard_exclude
 from analysis.ai_analyst import analyze_stock, generate_weekly_summary
@@ -233,17 +232,17 @@ def main():
     macro_data = {}
     try:
         macro_data = fetch_macro_context()
-        macro_summary = ", ".join(f"{k}={v.get('current', 0):.1f}" for k, v in macro_data.items())
-        print(f"[run_weekly] Macro: {macro_summary}")
+        # CPI carries yoy_pct rather than current, so a blanket .get("current") logged it as 0.0
+        parts = []
+        for k, v in macro_data.items():
+            val = v.get("current", v.get("yoy_pct"))
+            parts.append(f"{k}={val:.1f}" if isinstance(val, (int, float)) else f"{k}=n/a")
+        print(f"[run_weekly] Macro: {', '.join(parts)}")
     except Exception as exc:
         print(f"[run_weekly] Macro fetch failed (non-critical): {exc}")
     macro_text = format_macro_for_prompt(macro_data)
 
-    # 2. Reddit + Congress signals (used as bonus signals, not primary discovery)
-    print("[run_weekly] Discovering tickers from Reddit...")
-    reddit_tickers = get_tickers_from_reddit(hours_back=48, min_mentions=2)
-    print(f"[run_weekly] Reddit tickers: {reddit_tickers[:10]}")
-
+    # 2. Congress signals (bonus idea source, not primary discovery)
     print("[run_weekly] Fetching Congress trades...")
     congress_tickers = get_tickers_from_congress(days_back=14, min_members=1)
     print(f"[run_weekly] Congress tickers: {congress_tickers[:10]}")
@@ -252,7 +251,6 @@ def main():
     print("[run_weekly] Running autonomous stock discovery...")
     main_candidates, gem_candidates = select_candidates(
         portfolio_tickers=portfolio_tickers,
-        reddit_tickers=reddit_tickers,
         congress_tickers=congress_tickers,
         dt=today,
         max_main=25,
@@ -261,20 +259,13 @@ def main():
     all_candidates = list(dict.fromkeys(main_candidates + gem_candidates))
     print(f"[run_weekly] Total candidates to fetch: {all_candidates}")
 
-    # 4. StockTwits sentiment for all candidates
+    # 4. StockTwits sentiment for all candidates — sole source of the hype signal
     print("[run_weekly] Fetching StockTwits sentiment...")
     sentiment_signals = {}
     try:
         sentiment_signals = get_sentiment_batch(all_candidates)
     except Exception as exc:
         print(f"[run_weekly] StockTwits fetch failed: {exc}")
-
-    # Also try Reddit (may 403 on GitHub Actions — best-effort)
-    reddit_signals = {}
-    try:
-        reddit_signals = scrape_reddit(hours_back=48, target_tickers=all_candidates)
-    except Exception as exc:
-        print(f"[run_weekly] Reddit scrape failed (non-critical): {exc}")
 
     # 5. Congress signals
     print("[run_weekly] Fetching Congress signals...")
@@ -420,7 +411,6 @@ def main():
             rec = analyze_stock(
                 fundamentals=data["fundamentals"],
                 score_result=data["score"],
-                reddit_signal=reddit_signals.get(ticker),
                 congress_signal=congress_signals.get(ticker),
                 insider_signal=insider_signals.get(ticker),
                 portfolio_context=portfolio_context,

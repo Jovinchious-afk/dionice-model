@@ -19,22 +19,10 @@ AI-powered stock analysis system for a small retail investor using Revolut Basic
 | Account | Where | What you need |
 |---------|-------|---------------|
 | GitHub | github.com | Already have ✅ |
-| Reddit | reddit.com | Already have ✅ |
 | Supabase | supabase.com | Create free project |
 | Anthropic | console.anthropic.com | API key (~$5 credit to start) |
 | Gmail App Password | myaccount.google.com → Security → App Passwords | **Requires 2FA enabled first** |
 | Streamlit Cloud | share.streamlit.io | Sign in with GitHub |
-
----
-
-### Step 2 — Reddit API Setup
-
-1. Go to [reddit.com/prefs/apps](https://reddit.com/prefs/apps)
-2. Click **"Create App"** at the bottom
-3. Name: `dionice-model`
-4. Type: **script**
-5. Redirect URI: `http://localhost:8080`
-6. Note down: **client ID** (under app name) and **secret**
 
 ---
 
@@ -107,9 +95,6 @@ Add these secrets (one by one):
 
 | Secret name | Value |
 |-------------|-------|
-| `REDDIT_CLIENT_ID` | from Step 2 |
-| `REDDIT_CLIENT_SECRET` | from Step 2 |
-| `REDDIT_USER_AGENT` | `dionice-model/1.0 by u/YOUR_REDDIT_USERNAME` |
 | `ANTHROPIC_API_KEY` | from Step 4 |
 | `SUPABASE_URL` | from Step 3 |
 | `SUPABASE_KEY` | from Step 3 |
@@ -172,7 +157,8 @@ dionice-model/
 │   ├── fundamentals.py      # yfinance data fetcher + cache
 │   ├── scorer.py            # 5-category scoring system
 │   ├── congress_tracker.py  # Senate/House Stock Watcher
-│   ├── reddit_tracker.py    # Reddit PRAW + anti-hype filter
+│   ├── sentiment_tracker.py # StockTwits hype / anti-signal
+│   ├── insider_tracker.py   # SEC Form 4 open-market insider trades
 │   ├── ai_analyst.py        # Claude API synthesis
 │   └── email_sender.py      # Gmail SMTP + HTML builder
 ├── scripts/
@@ -190,13 +176,13 @@ dionice-model/
 
 ## How the AI Analyzes Stocks
 
-1. **Discovers tickers** from Reddit (anti-hype filtered), Congress trades, your portfolio, and manual watchlist
+1. **Discovers tickers** from a seeded sector-rotating universe sample, Congress trades, your portfolio, and manual watchlist
 2. **Fetches fundamentals** (P/E, PEG, FCF, margins, debt, etc.) via yfinance with 24h cache
 3. **Scores each stock** 0-100 using category-specific weights (quality compounder, value/cyclical, turnaround, speculative growth, dividend/defensive)
 4. **Claude analyzes** all signals and produces: action, buy zone, target, thesis, catalyst, downside scenario, evidence table
 5. **Email is sent** with max 4-7 actions; "NO TRADE" is a valid primary output
 
-**Reddit rule:** hype score ≥7/10 → automatically blocked from BUY → maximum WATCHLIST  
+**Hype rule:** StockTwits hype score ≥7/10 → automatically blocked from BUY → maximum WATCHLIST  
 **Congress rule:** weak signal only — idea source, never a buy trigger  
 **No trade rule:** every recommendation is compared to "hold cash or add to best existing position"
 

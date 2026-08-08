@@ -36,7 +36,7 @@
     "TDG", "HEI", "TXT", "DE", "PH", "EMR", "ETN", "ITW", "IR", "IEX",
     "XYL", "ROK", "ROP", "GNRC", "FAST", "GWW", "AIT", "MSA", "AME", "VRSK",
     "HUBB", "FBHS", "MAS", "WMS", "NDSN", "GTLS", "AIRGAIN", "CSL", "AOS",
-    "BMI", "CWCO", "FLOW", "HLIO", "REXNORD", "TT", "CARR", "OTIS", "EXPD",
+    "BMI", "CWCO", "FLOW", "HLIO", "ZWS", "TT", "CARR", "OTIS", "EXPD",
     "CHRW", "XPO", "SAIA", "ODFL", "JBHT", "KNX", "WERN", "PTSI", "MRTN",
     "ECHO", "HUBG", "LSTR", "FWRD", "DCOM", "SMBC", "FFIN", "TCBK", "TRMK"
   ],
@@ -44,14 +44,14 @@
     "AMZN", "COST", "WMT", "HD", "MCD", "SBUX", "NKE", "LOW", "TGT", "TJX",
     "ROST", "DG", "DLTR", "BBY", "ETSY", "CHWY", "CHEWY", "FLUT", "DKNG",
     "LVS", "MGM", "WYNN", "CZR", "BYD", "PENN", "HLT", "MAR", "H", "IHG",
-    "RCL", "CCL", "NCLH", "DAL", "UAL", "AAL", "LUV", "ULTA", "EL", "REVL",
+    "RCL", "CCL", "NCLH", "DAL", "UAL", "AAL", "LUV", "ULTA", "EL",
     "PG", "KO", "PEP", "MDLZ", "GIS", "K", "CPB", "CAG", "HRL", "SJM",
     "MKC", "HSY", "TSLA", "F", "GM", "STLA", "TM", "HMC", "LCID", "RIVN",
-    "BLNK", "CHPT", "EVGO", "WBD", "PARA", "DIS", "NFLX", "SPOT", "TTD",
-    "ROKU", "FUBO", "VZIO", "SONO", "HEAR", "KOSS", "GPRO"
+    "BLNK", "CHPT", "EVGO", "WBD", "PSKY", "DIS", "NFLX", "SPOT", "TTD",
+    "ROKU", "FUBO", "VZIO", "SONO", "KOSS", "GPRO"
   ],
   "financials": [
-    "BRK.B", "JPM", "BAC", "WFC", "MS", "GS", "C", "AXP", "V", "MA",
+    "BRK-B", "JPM", "BAC", "WFC", "MS", "GS", "C", "AXP", "V", "MA",
     "USB", "TFC", "PNC", "COF", "DFS", "SYF", "AIG", "MET", "PRU", "AFL",
     "ALL", "TRV", "PGR", "CB", "HIG", "MMC", "AON", "SCHW", "BLK", "BEN",
     "IVZ", "AMG", "TROW", "STT", "BK", "NTRS", "FHN", "FITB", "HBAN", "MTB",
@@ -84,7 +84,7 @@
   ],
   "communication": [
     "GOOGL", "META", "NFLX", "DIS", "CMCSA", "VZ", "T", "TMUS", "EA",
-    "TTWO", "ATVI", "PARA", "FOX", "OMC", "IPG", "MTCH", "IAC", "NYT",
+    "TTWO", "ATVI", "PSKY", "FOX", "OMC", "IPG", "MTCH", "IAC", "NYT",
     "NWSA", "SIRI", "LUMN", "FWONA", "LYV", "MSGS", "MSGE", "CLVT",
     "ANGI", "CARS", "CARG", "CDW", "COUR", "DUOL", "TWTR", "SNAP",
     "PINS", "RDDT", "BZFD", "BARK", "OYST"

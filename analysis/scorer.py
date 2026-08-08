@@ -32,6 +32,17 @@ WEIGHTS = {
 
 CATEGORY_INDEX = {cat: i for i, cat in enumerate(CATEGORIES)}
 
+# Altman Z-Score was derived from manufacturing firms. These sectors structurally
+# score in the "distress" zone while being nothing of the sort: regulated utilities
+# and real estate run high leverage against stable/asset-backed cash flows, and
+# financials have no meaningful working-capital or current-ratio concept.
+ALTMAN_EXEMPT_SECTORS = {
+    "utilities",
+    "financial services",
+    "financials",
+    "real estate",
+}
+
 
 def _score_metric(value: float | None, thresholds: list[tuple[float, int]]) -> int:
     """
@@ -257,13 +268,18 @@ def hard_exclude(fund: dict, category: str) -> tuple[bool, str]:
     if market_cap and market_cap < 30_000_000:
         return True, f"market_cap ${market_cap/1e6:.1f}M < $30M"
 
+    sector = (fund.get("sector") or "").strip().lower()
+    # Banks and insurers have no meaningful working-capital cycle, so current ratio
+    # says nothing about their solvency — it was excluding names like PGR at 0.29.
+    ratio_meaningful = sector not in ("financial services", "financials")
+
     cr = fund.get("current_ratio")
-    if cr is not None and cr < 0.3:
+    if ratio_meaningful and cr is not None and cr < 0.3:
         return True, f"current_ratio {cr:.2f} < 0.3 (likely insolvent)"
 
     de = fund.get("debt_equity")
     cr_val = cr or 1.0
-    if de is not None and de > 600 and cr_val < 0.5:
+    if ratio_meaningful and de is not None and de > 600 and cr_val < 0.5:
         return True, f"D/E {de:.0f} + CR {cr_val:.2f} — extreme leverage + illiquidity"
 
     if category not in ("speculative_growth",):
@@ -274,8 +290,12 @@ def hard_exclude(fund: dict, category: str) -> tuple[bool, str]:
         # Altman Z-Score < 1.81 = bankruptcy distress zone. Speculative_growth stocks
         # are pre-profit by design and routinely score low here, so this check is
         # skipped for that category — flagged as context in the AI prompt instead.
+        # Also skipped for the sectors the model was never built for (see
+        # ALTMAN_EXEMPT_SECTORS) — regulated utilities carry high debt by design and
+        # scored 0.98-1.01, which was excluding blue chips like AWK and PPL.
         z = fund.get("altman_z_score")
-        if z is not None and z < 1.81:
+        sector = (fund.get("sector") or "").strip().lower()
+        if z is not None and z < 1.81 and sector not in ALTMAN_EXEMPT_SECTORS:
             return True, f"Altman Z-Score {z:.2f} < 1.81 (bankruptcy distress zone)"
 
     # Liquidity: lower threshold for speculative/small-cap (gems), stricter for main universe
