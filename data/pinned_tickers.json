@@ -1,0 +1,10 @@
+{
+  "_meta": {
+    "description": "Tickers that must never be rotated out of stock_universe.json by the quarterly refresh. Portfolio positions are always analysed regardless, but pinning also keeps them in the sampling pool. Add anything you want permanently watched.",
+    "used_by": "scripts/refresh_universe.py"
+  },
+  "tickers": [
+    "VG",
+    "PTC"
+  ]
+}

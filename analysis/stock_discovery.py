@@ -63,7 +63,11 @@ def _week_seed(dt: datetime) -> int:
     return hash(f"{iso.year}-{iso.week}-{dt.weekday()}")
 
 
-def sample_main_universe(n: int = 22, dt: datetime | None = None) -> list[str]:
+def sample_main_universe(
+    n: int = 22,
+    dt: datetime | None = None,
+    exclude: set[str] | None = None,
+) -> list[str]:
     """
     Returns n tickers sampled from the sectors assigned to today's weekday.
     Utorak  (1): Technology, Energy, Materials, Real Estate
@@ -98,6 +102,13 @@ def sample_main_universe(n: int = 22, dt: datetime | None = None) -> list[str]:
             pool.extend(tickers)
         pool = list(dict.fromkeys(pool))
 
+    # Drop tickers production has repeatedly failed to fetch (see ticker_health)
+    if exclude:
+        before = len(pool)
+        pool = [t for t in pool if t not in exclude]
+        if before != len(pool):
+            print(f"[stock_discovery] Skipped {before - len(pool)} tickers retired as dead")
+
     sector_names = ", ".join(active_sectors) if active_sectors else "all"
     print(f"[stock_discovery] Sectors for weekday {weekday}: {sector_names} ({len(pool)} stocks in pool)")
 
@@ -107,13 +118,19 @@ def sample_main_universe(n: int = 22, dt: datetime | None = None) -> list[str]:
     return rng.sample(pool, sample_size)
 
 
-def sample_hidden_gems(n: int = 5, dt: datetime | None = None) -> list[str]:
+def sample_hidden_gems(
+    n: int = 5,
+    dt: datetime | None = None,
+    exclude: set[str] | None = None,
+) -> list[str]:
     """
     Returns n gem tickers sampled from hidden_gems.json.
     Same seeding logic — different picks every newsletter run.
     Price check ($12 cap) happens later in run_weekly.py after fundamentals fetch.
     """
     gems = _load_gems()
+    if exclude:
+        gems = [g for g in gems if g not in exclude]
     if not gems:
         return []
 
@@ -129,6 +146,7 @@ def select_candidates(
     dt: datetime | None = None,
     max_main: int = 8,
     max_gems: int = 5,
+    exclude: set[str] | None = None,
 ) -> tuple[list[str], list[str]]:
     """
     Builds the final candidate lists for a newsletter run.
@@ -147,7 +165,7 @@ def select_candidates(
     main: list[str] = list(dict.fromkeys(portfolio_tickers))
 
     # Fill remaining main slots from universe sample
-    universe_sample = sample_main_universe(n=max_main * 3, dt=now)
+    universe_sample = sample_main_universe(n=max_main * 3, dt=now, exclude=exclude)
     for ticker in universe_sample:
         if ticker not in main:
             main.append(ticker)
@@ -159,7 +177,7 @@ def select_candidates(
         main.append(ticker)
 
     # Gem candidates are kept separate
-    gems = sample_hidden_gems(n=max_gems, dt=now)
+    gems = sample_hidden_gems(n=max_gems, dt=now, exclude=exclude)
 
     print(f"[stock_discovery] Main candidates ({len(main)}): {main}")
     print(f"[stock_discovery] Gem candidates ({len(gems)}): {gems}")

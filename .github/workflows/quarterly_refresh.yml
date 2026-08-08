@@ -1,0 +1,57 @@
+name: Quarterly Universe Refresh
+
+on:
+  schedule:
+    # 1st of Jan/Apr/Jul/Oct at 06:00 UTC — ahead of the quarterly self-review at 09:00
+    # so that review reads an already-refreshed universe.
+    - cron: '0 6 1 1,4,7,10 *'
+  workflow_dispatch:
+
+# Needed because both scripts rewrite JSON in data/ and commit the diff back,
+# which is what makes each quarter's additions and removals auditable in git.
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Refresh main universe (S&P 1500 -> sector quotas)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/refresh_universe.py
+
+      - name: Refresh hidden gems (Nasdaq directory -> filtered)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/refresh_gems.py
+
+      - name: Commit the refreshed pools
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/stock_universe.json data/hidden_gems.json
+          if git diff --cached --quiet; then
+            echo "No universe changes this quarter."
+          else
+            git commit -m "Quarterly universe refresh $(date -u +%Y-%m-%d)"
+            git push
+          fi

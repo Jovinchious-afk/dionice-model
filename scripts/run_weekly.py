@@ -28,6 +28,7 @@ from analysis.stock_discovery import select_candidates
 from analysis.sentiment_tracker import get_sentiment_batch
 from analysis.macro_context import fetch_macro_context, format_macro_for_prompt
 from analysis.supabase_client import get_supabase
+from analysis.ticker_health import get_dead_tickers, load_health, record_run
 
 GEM_PRICE_CAP = 12.0  # hidden gems must be under this price to pass through
 
@@ -227,6 +228,15 @@ def main():
     if lessons_text:
         print("[run_weekly] Loaded quarterly self-review lessons")
 
+    # Tickers production has repeatedly failed to fetch — kept out of this run's sample
+    health = {}
+    dead_tickers: set[str] = set()
+    if db_client:
+        health = load_health(db_client)
+        dead_tickers = get_dead_tickers(db_client, health)
+        if dead_tickers:
+            print(f"[run_weekly] {len(dead_tickers)} tickers retired as dead, excluded from sampling")
+
     # 1b. Macro context (yfinance, free)
     print("[run_weekly] Fetching macro context...")
     macro_data = {}
@@ -253,8 +263,9 @@ def main():
         portfolio_tickers=portfolio_tickers,
         congress_tickers=congress_tickers,
         dt=today,
-        max_main=25,
+        max_main=35,
         max_gems=8,
+        exclude=dead_tickers,
     )
     all_candidates = list(dict.fromkeys(main_candidates + gem_candidates))
     print(f"[run_weekly] Total candidates to fetch: {all_candidates}")
@@ -286,6 +297,9 @@ def main():
     # 6. Fetch fundamentals for all candidates
     print("[run_weekly] Fetching fundamentals (this may take 2-3 minutes)...")
     fundamentals_map = fetch_multiple(all_candidates, delay_seconds=1.5)
+    # Keep the pre-filter map: fetch_error entries are dropped below, but they are
+    # exactly what ticker_health needs in order to retire dead tickers.
+    raw_fundamentals = dict(fundamentals_map)
 
     # 6b. Hard exclude structurally broken stocks (portfolio positions bypass)
     print("[run_weekly] Applying hard exclusion filter...")
@@ -431,6 +445,15 @@ def main():
             print(f"[run_weekly] {ticker}{gem_label}: {rec.get('action')} (confidence {rec.get('confidence')})")
         except Exception as exc:
             print(f"[run_weekly] AI analysis failed for {ticker}: {exc}")
+
+    # 8b. Record what production actually observed, so the universe self-cleans.
+    # fundamentals_map here is post-filter, so re-read the raw fetch for failures.
+    if db_client:
+        actioned = [
+            r.get("ticker") for r in recommendations
+            if r.get("action") not in ("NO_ACTION", "WAIT", None)
+        ]
+        record_run(db_client, raw_fundamentals, actioned_symbols=actioned, health=health)
 
     # 9. Newsletter summary
     print("[run_weekly] Generating newsletter summary...")

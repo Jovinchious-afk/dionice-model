@@ -67,6 +67,17 @@ def load_decisions(db) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def load_retired_tickers(db) -> pd.DataFrame:
+    """Tickers the weekly run has repeatedly failed to fetch (see analysis/ticker_health.py)."""
+    try:
+        result = db.table("ticker_health").select("*").gte("consecutive_failures", 3).execute()
+        if not result.data:
+            return pd.DataFrame()
+        return pd.DataFrame(result.data)
+    except Exception:
+        return pd.DataFrame()
+
+
 def load_latest_lessons(db) -> dict | None:
     try:
         result = db.table("model_lessons").select("*").order("generated_at", desc=True).limit(1).execute()
@@ -466,6 +477,16 @@ elif page == "Decisions":
         n = lessons.get("decisions_analyzed", 0)
         with st.expander(f"🧠 Naučene lekcije ({period}, {n} preporuka analizirano)", expanded=False):
             st.markdown(lessons.get("lessons_text", ""))
+
+    retired = load_retired_tickers(db)
+    if not retired.empty:
+        with st.expander(f"🗑️ Automatski izbačeno iz bazena ({len(retired)} tickera)", expanded=False):
+            st.caption(
+                "Tickeri koje weekly run nije uspio dohvatiti 3 puta zaredom — vjerojatno "
+                "delistani ili preimenovani. Vraćaju se sami ako ikad opet prorade."
+            )
+            cols = [c for c in ["symbol", "consecutive_failures", "last_error", "last_ok_at"] if c in retired.columns]
+            st.dataframe(retired[cols], use_container_width=True, hide_index=True)
 
     decisions_df = load_decisions(db)
 
