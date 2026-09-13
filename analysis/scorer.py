@@ -6,6 +6,8 @@ Five categories: quality_compounder, value_cyclical, turnaround,
 
 from typing import Any
 
+from analysis.sector_context import is_cyclical
+
 CATEGORIES = [
     "quality_compounder",
     "value_cyclical",
@@ -192,13 +194,23 @@ def _score_margin_trend(op_margin: float | None, net_margin: float | None) -> in
     return _score_metric(pct, [(20, 5), (12, 4), (6, 3), (1, 2), (0.01, 1)])
 
 
-def _score_inventory(revenue_growth: float | None) -> int:
-    # Without time-series data we approximate: if revenue is growing,
-    # inventory management is likely fine. Returns neutral 3 as placeholder
-    # (a future enhancement can compare inventory/sales over 2 quarters).
-    if revenue_growth is None:
-        return 2
-    return 4 if revenue_growth > 0 else 2
+def _score_inventory(inventory_growth: float | None, sales_growth: float | None) -> int:
+    """
+    Inventory vs sales, same quarter a year apart. The investor's rule: inventories
+    growing twice as fast as sales = sell. No inventory line (software, banks) or
+    no data is neutral rather than a penalty.
+    """
+    if inventory_growth is None or sales_growth is None:
+        return 3
+    if inventory_growth > 0.10 and inventory_growth > 2 * max(sales_growth, 0.0):
+        return 1
+    if inventory_growth <= sales_growth:
+        return 5
+    if inventory_growth <= sales_growth + 0.05:
+        return 4
+    if inventory_growth <= sales_growth + 0.10:
+        return 3
+    return 2
 
 
 def score_stock(fundamentals: dict, category: str, sector_pe: float = 20.0) -> dict:
@@ -210,8 +222,16 @@ def score_stock(fundamentals: dict, category: str, sector_pe: float = 20.0) -> d
         category = "quality_compounder"
     idx = CATEGORY_INDEX[category]
 
+    # A cyclical's trailing P/E is inflated by depressed earnings at the bottom of
+    # the cycle (GNRC: 42.9 trailing vs 15.8 forward), so judge it on forward P/E.
+    pe = fundamentals.get("pe")
+    if category == "value_cyclical" and fundamentals.get("forward_pe"):
+        pe = fundamentals.get("forward_pe")
+    quarterly_sales = fundamentals.get("quarterly_revenue_growth_yoy")
+    sales_growth = quarterly_sales if quarterly_sales is not None else fundamentals.get("revenue_growth_yoy")
+
     raw_scores = {
-        "pe_vs_sector":    _score_pe(fundamentals.get("pe"), sector_pe),
+        "pe_vs_sector":    _score_pe(pe, sector_pe),
         "peg":             _score_peg_value(fundamentals.get("peg")),
         "fcf_yield":       _score_fcf_yield(fundamentals.get("fcf_yield")),
         "revenue_growth":  _score_revenue_growth(fundamentals.get("revenue_growth_yoy")),
@@ -226,7 +246,7 @@ def score_stock(fundamentals: dict, category: str, sector_pe: float = 20.0) -> d
                                fundamentals.get("op_margin"),
                                fundamentals.get("net_margin")
                            ),
-        "inventory_trend": _score_inventory(fundamentals.get("revenue_growth_yoy")),
+        "inventory_trend": _score_inventory(fundamentals.get("inventory_growth_yoy"), sales_growth),
     }
 
     weighted_scores = {}
@@ -327,6 +347,13 @@ def classify_category(fundamentals: dict) -> str:
     # Dividend/defensive: utilities, consumer staples, telecoms with dividend
     if div_yield > 0.025 and sector in ("utilities", "consumer defensive", "communication services"):
         return "dividend_defensive"
+
+    # Cyclicals before everything else: the investor's rules treat them differently
+    # (inventories, cycle position, inverted P/E) and warn against buying them for
+    # income. Checked before the P/E > 40 turnaround rule, which misfiled GNRC —
+    # a cyclical at the bottom of its cycle — as a turnaround.
+    if is_cyclical(fundamentals):
+        return "value_cyclical"
 
     # Dividend/defensive: any stock with >4% yield
     if div_yield > 0.04:

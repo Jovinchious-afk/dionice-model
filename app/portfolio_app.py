@@ -13,6 +13,7 @@ import streamlit as st
 import yfinance as yf
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from analysis.portfolio import compute_holdings
 from analysis.supabase_client import SupabaseClient
 
 st.set_page_config(
@@ -123,46 +124,73 @@ def format_price(value) -> str:
         return "Pending"
 
 
-def compute_portfolio(tx_df: pd.DataFrame) -> pd.DataFrame:
-    """Aggregates transactions into current holdings."""
+def text_value(value) -> str:
+    return str(value) if has_value(value) else ""
+
+
+def load_cash(db) -> dict:
+    cash = {"cash_usd": 0.0, "cash_eur": 0.0}
+    try:
+        for row in db.table("account_settings").select("*").execute().data or []:
+            if row.get("key") in cash and row.get("value") is not None:
+                cash[row["key"]] = float(row["value"])
+    except Exception:
+        pass  # table is created by data/schema_v7.sql
+    return cash
+
+
+def save_cash(db, cash_usd: float, cash_eur: float) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        db.table("account_settings").upsert([
+            {"key": "cash_usd", "value": cash_usd, "updated_at": now},
+            {"key": "cash_eur", "value": cash_eur, "updated_at": now},
+        ]).execute()
+        st.success("Gotovina spremljena — agent je uzima u obzir od idućeg newslettera.")
+    except Exception as e:
+        st.error(f"Spremanje nije uspjelo (je li pokrenut data/schema_v7.sql u Supabaseu?): {e}")
+
+
+def load_positions_meta(db) -> dict:
+    try:
+        return {row["symbol"]: row for row in db.table("positions_meta").select("*").execute().data or []}
+    except Exception:
+        return {}
+
+
+def save_position_meta(db, symbol: str, fields: dict, keep_empty: bool = False) -> None:
+    """Upserts the investor's thesis for a position; empty fields are skipped unless keep_empty."""
+    row = {"symbol": symbol, "updated_at": datetime.now(timezone.utc).isoformat()}
+    for key, value in fields.items():
+        value = (value or "").strip()
+        if value or keep_empty:
+            row[key] = value or None
+    try:
+        db.table("positions_meta").upsert(row, on_conflict="symbol").execute()
+        st.success(f"Teza za {symbol} spremljena.")
+    except Exception as e:
+        st.error(f"Spremanje teze nije uspjelo (je li pokrenut data/schema_v7.sql u Supabaseu?): {e}")
+
+
+def compute_portfolio(tx_df: pd.DataFrame) -> tuple[pd.DataFrame, float]:
+    """Current holdings plus realized P&L, via the same cost method the newsletter uses."""
     if tx_df.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(), 0.0
 
-    holdings: dict[str, dict] = {}
-    for _, row in tx_df.sort_values("trade_date").iterrows():
-        sym = row["symbol"]
-        if sym not in holdings:
-            holdings[sym] = {
-                "Symbol": sym,
-                "Company": row.get("company_name", sym),
-                "Shares": 0.0,
-                "Total Cost (EUR)": 0.0,
-                "Currency": row.get("currency", "EUR"),
-            }
-        shares = float(row.get("shares", 0))
-        price = float(row.get("price_per_share", 0))
-        if row["action"] == "BUY":
-            holdings[sym]["Shares"] += shares
-            holdings[sym]["Total Cost (EUR)"] += shares * price
-        elif row["action"] == "SELL":
-            if holdings[sym]["Shares"] > 0:
-                ratio = max(0, (holdings[sym]["Shares"] - shares) / holdings[sym]["Shares"])
-                holdings[sym]["Total Cost (EUR)"] *= ratio
-            holdings[sym]["Shares"] = max(0, holdings[sym]["Shares"] - shares)
-
-    rows = []
-    for sym, h in holdings.items():
-        if h["Shares"] > 0:
-            avg_cost = h["Total Cost (EUR)"] / h["Shares"]
-            rows.append({
-                "Symbol": sym,
-                "Company": h["Company"],
-                "Shares": round(h["Shares"], 4),
-                "Avg Cost (USD)": round(avg_cost, 4),
-                "Total Cost (USD)": round(h["Total Cost (EUR)"], 2),
-            })
-
-    return pd.DataFrame(rows) if rows else pd.DataFrame()
+    holdings = compute_holdings(tx_df.to_dict("records"))
+    realized = sum(h["realized_pnl_usd"] for h in holdings.values())
+    rows = [
+        {
+            "Symbol": h["symbol"],
+            "Company": h["company_name"],
+            "Shares": round(h["shares"], 4),
+            "Avg Cost (USD)": round(h["avg_cost_usd"], 4),
+            "Total Cost (USD)": round(h["cost_usd"], 2),
+        }
+        for h in holdings.values()
+        if h["shares"] > 0
+    ]
+    return (pd.DataFrame(rows) if rows else pd.DataFrame()), realized
 
 
 @st.cache_data(ttl=300)
@@ -206,7 +234,8 @@ if page == "Portfolio":
     st.title("Portfolio")
 
     tx_df = load_transactions(db)
-    portfolio = compute_portfolio(tx_df)
+    portfolio, realized_pnl = compute_portfolio(tx_df)
+    cash = load_cash(db)
 
     if portfolio.empty:
         st.info("No positions yet. Use 'Log Trade' to add your first trade.")
@@ -252,7 +281,7 @@ if page == "Portfolio":
         )
 
         # Summary metrics
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         col1.metric("Total Invested", f"${total_invested:,.2f}")
         if total_pnl is not None:
             # Use plain number string (no $ prefix) so Streamlit correctly
@@ -265,7 +294,9 @@ if page == "Portfolio":
             )
         else:
             col2.metric("Current Value", "N/A")
-        col3.metric("Positions", len(portfolio))
+        col3.metric("Gotovina", f"${cash['cash_usd']:,.0f} + €{cash['cash_eur']:,.0f}")
+        col4.metric("Positions", len(portfolio))
+        st.caption(f"Realizirani P&L (prodane dionice): ${realized_pnl:+,.2f}")
 
         # Format columns for display (after numeric calculations)
         display["Price Now (USD)"] = display["Symbol"].map(
@@ -298,6 +329,33 @@ if page == "Portfolio":
                 "consider whether new capacity should go elsewhere."
             )
 
+        with st.expander("📝 Teza po poziciji — zašto držiš i što bi te natjeralo da prodaš"):
+            st.caption("Agent ovo čita prije svake analize, a SELL/REDUCE mora izravno pobiti tvoju tezu.")
+            meta_by_symbol = load_positions_meta(db)
+            thesis_symbol = st.selectbox("Pozicija", portfolio["Symbol"].tolist(), key="thesis_symbol")
+            current_meta = meta_by_symbol.get(thesis_symbol, {})
+            with st.form("thesis_form"):
+                thesis_text = st.text_area("Zašto držim (teza)", value=text_value(current_meta.get("personal_thesis")))
+                triggers_text = st.text_area(
+                    "Što bi me natjeralo da prodam",
+                    value=text_value(current_meta.get("sell_triggers")),
+                    placeholder="npr. marže padaju 3 kvartala zaredom; zalihe rastu brže od prodaje",
+                )
+                macro_text = st.text_area("Makro pogled (opcionalno)", value=text_value(current_meta.get("macro_view")))
+                if st.form_submit_button("Spremi tezu"):
+                    save_position_meta(db, thesis_symbol, {
+                        "personal_thesis": thesis_text,
+                        "sell_triggers": triggers_text,
+                        "macro_view": macro_text,
+                    }, keep_empty=True)
+
+    with st.expander("💵 Gotovina — ulazi u veličinu pozicija i usporedbu s držanjem gotovine"):
+        with st.form("cash_form"):
+            cash_usd = st.number_input("Gotovina u USD", min_value=0.0, step=100.0, value=float(cash["cash_usd"]))
+            cash_eur = st.number_input("Gotovina u EUR", min_value=0.0, step=100.0, value=float(cash["cash_eur"]))
+            if st.form_submit_button("Spremi gotovinu"):
+                save_cash(db, cash_usd, cash_eur)
+
     st.subheader("Transaction History")
     if tx_df.empty:
         st.info("No transactions recorded.")
@@ -327,6 +385,10 @@ elif page == "Log Trade":
         trade_time = st.time_input("Trade Time (local)", value=datetime.now().time())
         notes = st.text_area("Notes (optional)", placeholder="e.g. Added to position after earnings dip")
 
+        st.caption("Samo za BUY (opcionalno) — agent čita tvoju tezu prije svake analize te pozicije:")
+        buy_thesis = st.text_area("Zašto kupujem (teza)", placeholder="npr. sezona uragana + data centri, dug pada")
+        buy_triggers = st.text_area("Što bi me natjeralo da prodam", placeholder="npr. zalihe rastu 2x brže od prodaje")
+
         submitted = st.form_submit_button("Save Trade", type="primary")
 
     if submitted:
@@ -349,6 +411,8 @@ elif page == "Log Trade":
             try:
                 db.table("transactions").insert(row).execute()
                 st.success(f"✅ {action} {shares:.4f} {symbol} @ {price:.4f} {currency} saved!")
+                if action == "BUY" and (buy_thesis.strip() or buy_triggers.strip()):
+                    save_position_meta(db, symbol, {"personal_thesis": buy_thesis, "sell_triggers": buy_triggers})
                 st.cache_resource.clear()
             except Exception as e:
                 st.error(f"Failed to save trade: {e}")
@@ -501,8 +565,12 @@ elif page == "Decisions":
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Total recommendations", total)
         col2.metric("You followed", f"{followed}/{total}")
-        col3.metric("Correct at 30d", correct_30)
-        col4.metric("Wrong at 30d", wrong_30)
+        col3.metric("Bolje od S&P @30d", correct_30)
+        col4.metric("Lošije od S&P @30d", wrong_30)
+        st.caption(
+            "Ishod se mjeri u odnosu na S&P 500 u istom razdoblju. WATCHLIST/WAIT i buy zone koje nisu "
+            "dosegnute su 'neutral' — to nisu bile kupnje."
+        )
 
         now = datetime.now(timezone.utc)
 
@@ -519,7 +587,7 @@ elif page == "Decisions":
             except Exception:
                 pass
         if near_30d_count:
-            st.info(f"🔔 {near_30d_count} preporuka je blizu 30-dnevne provjere — outcome se automatski ažurira ponedjeljkom.")
+            st.info(f"🔔 {near_30d_count} preporuka je blizu 30-dnevne provjere — outcome se automatski ažurira srijedom.")
 
         st.subheader("All Decisions")
         for _, row in decisions_df.iterrows():
@@ -540,7 +608,7 @@ elif page == "Decisions":
 
             with st.expander(label):
                 if near_30d:
-                    st.info("Ova preporuka je stara 25-35 dana — outcome_30d se automatski upisuje idući ponedjeljak.")
+                    st.info("Ova preporuka je stara 25-35 dana — outcome_30d se automatski upisuje iduću srijedu.")
                 col1, col2 = st.columns(2)
                 with col1:
                     st.markdown(f"**Agent action:** {row.get('agent_action','')}")
@@ -560,9 +628,17 @@ elif page == "Decisions":
                     st.markdown(f"**Price at rec:** {row.get('price_at_recommendation','N/A')}")
                     st.caption(f"Thesis: {(row.get('agent_thesis') or '')[:200]}")
                 with col2:
-                    st.markdown(f"**30d price:** {format_price(row.get('price_30d'))}")
-                    st.markdown(f"**90d price:** {format_price(row.get('price_90d'))}")
-                    st.markdown(f"**180d price:** {format_price(row.get('price_180d'))}")
+                    for suffix in ("30d", "90d", "180d"):
+                        price_line = f"**{suffix} price:** {format_price(row.get('price_' + suffix))}"
+                        outcome = row.get("outcome_" + suffix)
+                        if has_value(row.get("price_" + suffix)) and has_value(outcome):
+                            price_line += f" — {outcome}"
+                        st.markdown(price_line)
+                        if has_value(row.get("excess_return_" + suffix)):
+                            stock_ret = float(row.get("return_" + suffix))
+                            spy_ret = float(row.get("spy_return_" + suffix))
+                            excess = float(row.get("excess_return_" + suffix))
+                            st.caption(f"Dionica {stock_ret:+.1f}% vs S&P 500 {spy_ret:+.1f}% → {excess:+.1f} pp")
 
                 for suffix, checkpoint_label in [("30d", "30 dana"), ("90d", "90 dana"), ("180d", "180 dana")]:
                     reasoning = row.get(f"outcome_reasoning_{suffix}")

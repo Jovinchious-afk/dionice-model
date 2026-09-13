@@ -38,6 +38,10 @@ class SupabaseTable:
         self._filters.append(f"{column}=gte.{value}")
         return self
 
+    def not_null(self, column: str):
+        self._filters.append(f"{column}=not.is.null")
+        return self
+
     def order(self, column: str, desc: bool = False):
         self._order_col = column
         self._order_desc = desc
@@ -51,9 +55,10 @@ class SupabaseTable:
         self._insert_data = row
         return self
 
-    def upsert(self, rows: dict | list):
-        """Insert, or overwrite existing rows matching the primary key."""
+    def upsert(self, rows: dict | list, on_conflict: str | None = None):
+        """Insert, or overwrite existing rows matching the primary key (or the `on_conflict` unique column)."""
         self._upsert_data = rows
+        self._on_conflict = on_conflict
         return self
 
     def update(self, data: dict):
@@ -63,7 +68,8 @@ class SupabaseTable:
     def execute(self):
         if hasattr(self, "_upsert_data"):
             headers = {**self._headers, "Prefer": "return=representation,resolution=merge-duplicates"}
-            resp = requests.post(self._url, json=self._upsert_data, headers=headers, timeout=30)
+            url = f"{self._url}?on_conflict={self._on_conflict}" if self._on_conflict else self._url
+            resp = requests.post(url, json=self._upsert_data, headers=headers, timeout=30)
             resp.raise_for_status()
             return type("Result", (), {"data": resp.json()})()
 

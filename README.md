@@ -193,7 +193,7 @@ dionice-model/
 - **Tuesday 15:00 CET** — Weekly newsletter
 - **Thursday 15:00 CET** — Weekly newsletter  
 - **First Saturday of month, 09:00 UTC** — Monthly deep report
-- **Monday 10:00 UTC** — Background price update (no email)
+- **Wednesday 10:00 UTC** — Background decision scoring vs S&P 500 + buy-zone check (no email)
 
 Note: Schedules use UTC. Summer = CEST (UTC+2), so 13:00 UTC = 15:00 CEST.
 

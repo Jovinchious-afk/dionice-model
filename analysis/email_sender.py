@@ -34,10 +34,15 @@ def _fmt(val: Any, suffix: str = "", decimals: int = 2) -> str:
         return str(val)
 
 
+def _has_text(value) -> bool:
+    return bool(value) and str(value).strip().upper() not in ("N/A", "NONE", "NULL")
+
+
 def _action_color(action: str) -> str:
     colors = {
         "BUY_BELOW": "#1a7a1a",
         "ADD_ON_DIP": "#2d8a2d",
+        "HOLD": "#1f5f8b",
         "SELL": "#b30000",
         "REDUCE": "#cc3300",
         "WATCHLIST": "#7a5c00",
@@ -52,6 +57,7 @@ def _action_label(action: str) -> str:
     labels = {
         "BUY_BELOW": "BUY BELOW",
         "ADD_ON_DIP": "ADD ON DIP",
+        "HOLD": "HOLD (DRŽI)",
         "SELL": "SELL",
         "REDUCE": "REDUCE POSITION",
         "WATCHLIST": "WATCHLIST",
@@ -69,7 +75,7 @@ def _build_evidence_table(ev: dict) -> str:
         ("P/E", ev.get("pe", "N/A")),
         ("Forward P/E", ev.get("forward_pe", "N/A")),
         ("PEG", ev.get("peg", "N/A")),
-        ("Debt/Equity", ev.get("debt_equity", "N/A")),
+        ("Dug/kapital", ev.get("debt_equity", "N/A")),
         ("Revenue growth", ev.get("revenue_growth", "N/A")),
         ("FCF yield", ev.get("fcf_yield", "N/A")),
         ("Op. margin", ev.get("op_margin", "N/A")),
@@ -77,6 +83,8 @@ def _build_evidence_table(ev: dict) -> str:
         ("Congress signal", ev.get("congress_signal", "N/A")),
         ("StockTwits", ev.get("stocktwits", "N/A")),
         ("Earnings za", ev.get("earnings_in", "N/A")),
+        ("Checklist ulagača", ev.get("checklist", "N/A")),
+        ("Sezonalnost", ev.get("seasonality", "N/A")),
         ("Fund. score", ev.get("fundamental_score", "N/A")),
         ("Confidence", ev.get("confidence", "N/A")),
     ]
@@ -134,6 +142,41 @@ def _build_stock_block(rec: dict) -> str:
     if hype_note:
         hype_note_html = f"<p style='background:#fff3cd;padding:6px 10px;border-radius:4px;font-size:12px;margin:6px 0;'>⚠️ {hype_note}</p>"
 
+    guard_note = rec.get("sell_guard_note", "")
+    guard_html = ""
+    if guard_note:
+        guard_html = (
+            "<p style='background:#e8f1fa;border-left:4px solid #1f5f8b;padding:8px 12px;"
+            f"border-radius:0 4px 4px 0;font-size:13px;margin:8px 0;'>🛡️ {guard_note}</p>"
+        )
+
+    investor_view = rec.get("investor_view", "")
+    counter_argument = rec.get("counter_argument", "")
+    debate_html = ""
+    if _has_text(investor_view) or _has_text(counter_argument):
+        debate_html = (
+            "<div style='background:#f4f8fc;border-left:4px solid #1f5f8b;padding:10px 14px;margin:8px 0;"
+            "border-radius:0 4px 4px 0;font-size:13px;'>"
+            f"<p style='margin:2px 0;'><strong>🧭 Tvoj pogled:</strong> {investor_view}</p>"
+            f"<p style='margin:6px 0 2px;'><strong>⚖️ Protuargument:</strong> {counter_argument}</p>"
+            "</div>"
+        )
+
+    context_html = ""
+    for field_label, field_key in (("Ciklus/sezona", "cycle_view"), ("Promjena od zadnje analize", "change_vs_last")):
+        if _has_text(rec.get(field_key)):
+            context_html += f"<p style='margin:6px 0;font-size:13px;'><strong>{field_label}:</strong> {rec.get(field_key)}</p>"
+
+    checklist_fails = rec.get("checklist_fails") or []
+    checklist_html = ""
+    if checklist_fails:
+        fail_items = "".join(f"<li style='font-size:13px;margin:2px 0;'>{item}</li>" for item in checklist_fails)
+        summary_txt = rec.get("checklist_summary", "")
+        checklist_html = (
+            f"<p style='margin:8px 0 4px;font-size:13px;'><strong>Checklist ulagača ({summary_txt}) — ne prolazi:</strong></p>"
+            f"<ul style='margin:4px 0;padding-left:18px;'>{fail_items}</ul>"
+        )
+
     return f"""
 <div style='border:1px solid {"#6a0dad" if is_gem else "#e0e0e0"};border-radius:8px;padding:16px;margin:16px 0;background:{"#fdf6ff" if is_gem else "#fafafa"};'>
   <div style='display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap;'>
@@ -150,12 +193,16 @@ def _build_stock_block(rec: dict) -> str:
     <strong>Pouzdanost:</strong> {confidence}/10
   </p>
   {hype_note_html}
+  {guard_html}
   <p style='margin:10px 0 4px;font-size:14px;'><strong>Teza:</strong> {thesis}</p>
+  {debate_html}
   <p style='margin:6px 0;font-size:13px;'><strong>Valuacija:</strong> {valuation}</p>
+  {context_html}
   <p style='margin:6px 0;font-size:13px;'><strong>Katalizator:</strong> {catalyst}</p>
   <p style='margin:6px 0;font-size:13px;'><strong>Downside scenarij:</strong> {downside}</p>
   <p style='margin:6px 0;font-size:13px;'><strong>vs. Čekanje/Cash:</strong> {vs_cash}</p>
   {thesis_breakers_html}
+  {checklist_html}
   {red_flags_html}
   <details style='margin-top:10px;'>
     <summary style='cursor:pointer;font-size:13px;color:#555;'>Tablica dokaza ▾</summary>
@@ -170,6 +217,7 @@ def build_html_email(
     portfolio_value: float | None,
     portfolio_positions: list[dict],
     email_type: str = "WEEKLY",
+    cash_line: str | None = None,
 ) -> str:
     date_str = summary.get("date", datetime.now().strftime("%Y-%m-%d"))
     market_comment = summary.get("overall_market_comment", "")
@@ -182,12 +230,15 @@ def build_html_email(
     buy_count = sum(1 for r in recommendations if r.get("action") in ("BUY_BELOW", "ADD_ON_DIP"))
     sell_count = sum(1 for r in recommendations if r.get("action") in ("SELL", "REDUCE"))
     watch_count = sum(1 for r in recommendations if r.get("action") == "WATCHLIST")
+    hold_count = sum(1 for r in recommendations if r.get("action") == "HOLD")
 
     banner_items = []
     if buy_count:
         banner_items.append(f"<span style='color:#1a7a1a;font-weight:700;'>✅ {buy_count} BUY</span>")
     if sell_count:
         banner_items.append(f"<span style='color:#b30000;font-weight:700;'>🔴 {sell_count} SELL</span>")
+    if hold_count:
+        banner_items.append(f"<span style='color:#1f5f8b;font-weight:700;'>📌 {hold_count} HOLD</span>")
     if watch_count:
         banner_items.append(f"<span style='color:#7a5c00;font-weight:700;'>👁 {watch_count} WATCHLIST</span>")
     if no_trade:
@@ -195,6 +246,7 @@ def build_html_email(
     banner_html = " &nbsp;|&nbsp; ".join(banner_items) if banner_items else "⏳ NO TRADE THIS WEEK"
 
     # Portfolio summary
+    cash_html = f"<p style='font-size:13px;margin:6px 0;'><strong>💵 {cash_line}</strong></p>" if cash_line else ""
     portfolio_html = ""
     if portfolio_positions:
         rows = "".join(
@@ -217,7 +269,8 @@ def build_html_email(
     <th style='padding:6px 10px;text-align:left;'>P&L %</th>
   </tr></thead>
   <tbody>{rows}</tbody>
-</table>"""
+</table>
+{cash_html}"""
 
     # Stock recommendation blocks
     rec_blocks = ""

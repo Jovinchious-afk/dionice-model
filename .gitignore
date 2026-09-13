@@ -11,3 +11,5 @@ Thumbs.db
 ~$*
 *.tmp
 .streamlit/secrets.toml
+# Personal investor profile — uploaded to Supabase, never committed (public repo)
+private/

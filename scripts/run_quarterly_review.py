@@ -23,6 +23,30 @@ import anthropic
 from analysis.supabase_client import get_supabase
 
 MODEL = "claude-haiku-4-5-20251001"
+REPEAT_WINDOW_DAYS = 30
+
+
+def collapse_repeats(decisions: list[dict]) -> list[dict]:
+    """
+    Until 2026-09 every newsletter run logged a fresh decision even when the call
+    had not changed (GNRC: six rows in four weeks), which would count one call many
+    times. Keeps the first row of each identical (symbol, action) call within
+    REPEAT_WINDOW_DAYS. Returned newest first.
+    """
+    kept, last_kept = [], {}
+    for d in sorted(decisions, key=lambda r: r.get("recommended_at") or ""):
+        key = (d.get("symbol"), d.get("agent_action"))
+        try:
+            ts = datetime.fromisoformat(d.get("recommended_at"))
+        except (TypeError, ValueError):
+            ts = None
+        previous = last_kept.get(key)
+        if previous and ts and (ts - previous).days < REPEAT_WINDOW_DAYS:
+            continue
+        kept.append(d)
+        if ts:
+            last_kept[key] = ts
+    return list(reversed(kept))
 
 
 def get_resolved_decisions(limit: int = 150) -> list[dict]:
@@ -32,7 +56,7 @@ def get_resolved_decisions(limit: int = 150) -> list[dict]:
         return []
     try:
         result = client.table("decisions").select("*").order("recommended_at", desc=True).execute()
-        rows = result.data or []
+        rows = collapse_repeats(result.data or [])
     except Exception as exc:
         print(f"[run_quarterly_review] Supabase fetch failed: {exc}")
         return []
@@ -58,12 +82,18 @@ def generate_lessons(decisions: list[dict], period_label: str) -> str | None:
             "outcome_30d": d.get("outcome_30d"),
             "outcome_90d": d.get("outcome_90d"),
             "outcome_180d": d.get("outcome_180d"),
+            "excess_vs_sp500_pp_30d": d.get("excess_return_30d"),
+            "excess_vs_sp500_pp_90d": d.get("excess_return_90d"),
+            "excess_vs_sp500_pp_180d": d.get("excess_return_180d"),
             "reasoning_30d": (d.get("outcome_reasoning_30d") or "")[:200],
         }
         for d in decisions
     ]
 
     prompt = f"""Napravi kvartalni retrospektivni pregled AI agent-preporuka za dionice ({period_label}), radi kalibracije budućih preporuka. NA HRVATSKOM JEZIKU.
+
+Ishod "correct"/"wrong" mjeri se u odnosu na S&P 500 u istom razdoblju (excess_vs_sp500_pp = razlika u postotnim poenima).
+"neutral" znači da nije bilo kupnje: WATCHLIST/WAIT, ili buy zona nije dosegnuta. Ponovljeni isti pozivi na istu dionicu već su spojeni u jedan.
 
 SVE PREPORUKE S BAREM JEDNIM POZNATIM ISHODOM ({len(slim)} preporuka):
 {json.dumps(slim, indent=2, default=str)}

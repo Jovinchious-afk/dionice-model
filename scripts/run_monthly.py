@@ -17,7 +17,7 @@ from analysis.fundamentals import fetch_multiple
 from analysis.scorer import score_stock, classify_category
 from analysis.email_sender import send_email
 from analysis.ai_analyst import analyze_stock
-
+from analysis.portfolio import compute_holdings
 from analysis.supabase_client import get_supabase
 
 import anthropic
@@ -58,29 +58,16 @@ def get_portfolio_from_supabase() -> tuple[list[dict], str]:
     if not client:
         return [], "Portfolio unavailable."
     try:
-        result = client.table("transactions").select("*").order("trade_date").execute()
-        rows = result.data or []
-        holdings: dict[str, dict] = {}
-        for row in rows:
-            sym = row["symbol"]
-            if sym not in holdings:
-                holdings[sym] = {"symbol": sym, "shares": 0, "total_cost": 0.0, "currency": row.get("currency", "EUR")}
-            shares = float(row.get("shares", 0))
-            price = float(row.get("price_per_share", 0))
-            if row["action"] == "BUY":
-                holdings[sym]["shares"] += shares
-                holdings[sym]["total_cost"] += shares * price
-            elif row["action"] == "SELL":
-                holdings[sym]["shares"] -= shares
-        active = {k: v for k, v in holdings.items() if v["shares"] > 0}
-        positions = list(active.values())
-        context = "Holdings: " + "; ".join(
-            f"{p['symbol']} {p['shares']:.0f} shares" for p in positions
-        ) if positions else "Empty portfolio."
-        return positions, context
+        rows = client.table("transactions").select("*").order("trade_date").execute().data or []
     except Exception as exc:
         print(f"[run_monthly] Supabase error: {exc}")
         return [], "Portfolio unavailable."
+    # Shared with the weekly run: cost resets on a full exit, EUR trades converted to USD
+    positions = [h for h in compute_holdings(rows).values() if h["shares"] > 0]
+    context = "Holdings: " + "; ".join(
+        f"{p['symbol']} {p['shares']:g} shares @ avg ${p['avg_cost_usd']:.2f}" for p in positions
+    ) if positions else "Empty portfolio."
+    return positions, context
 
 
 def generate_monthly_report(
@@ -99,19 +86,19 @@ def generate_monthly_report(
     positions_summary = []
     for p in portfolio_positions:
         sym = p["symbol"]
-        avg_cost = p["total_cost"] / p["shares"] if p["shares"] > 0 else 0
         fund = fundamentals_map.get(sym, {})
         score = scored_map.get(sym, {})
         positions_summary.append({
             "symbol": sym,
             "shares": p["shares"],
-            "avg_cost_eur": round(avg_cost, 2),
+            "avg_cost_usd": round(p["avg_cost_usd"], 2),
+            "realized_pnl_usd": round(p["realized_pnl_usd"], 2),
             "sector": fund.get("sector", "Unknown"),
             "category": score.get("category", "Unknown"),
             "fundamental_score": score.get("total_score", "N/A"),
             "pe": fund.get("pe"),
             "op_margin": fund.get("op_margin"),
-            "debt_equity": fund.get("debt_equity"),
+            "debt_to_equity_x": fund.get("debt_to_equity_x"),
             "revenue_growth_yoy": fund.get("revenue_growth_yoy"),
         })
 

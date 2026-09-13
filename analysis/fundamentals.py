@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import yfinance as yf
 
 CACHE_PATH = Path(__file__).parent.parent / "data" / "yfinance_cache.json"
@@ -112,6 +113,176 @@ def _fetch_news_headlines(stock, limit: int = 3) -> list[str]:
         return []
 
 
+MONTHS_HR = ["siječanj", "veljača", "ožujak", "travanj", "svibanj", "lipanj",
+             "srpanj", "kolovoz", "rujan", "listopad", "studeni", "prosinac"]
+
+
+def _round(value, digits: int = 4):
+    return round(value, digits) if value is not None else None
+
+
+def _quarter_yoy(df, label: str) -> float | None:
+    """Latest quarter vs the same quarter a year earlier (yfinance columns are newest-first)."""
+    try:
+        if df is None or df.empty or label not in df.index:
+            return None
+        row = df.loc[label].dropna()
+        if len(row) < 2:
+            return None
+        latest_date, latest = row.index[0], float(row.iloc[0])
+        for date, value in row.iloc[1:].items():
+            if 330 <= (latest_date - date).days <= 400:
+                prior = float(value)
+                return (latest - prior) / abs(prior) if prior else None
+    except Exception:
+        pass
+    return None
+
+
+def _quarterly_op_margins(qfin) -> list[float]:
+    """Operating margin per quarter in %, newest first, up to 4 quarters."""
+    try:
+        if qfin is None or qfin.empty or "Operating Income" not in qfin.index or "Total Revenue" not in qfin.index:
+            return []
+        margins = []
+        for col in qfin.columns:
+            op, rev = qfin.loc["Operating Income", col], qfin.loc["Total Revenue", col]
+            if op != op or rev != rev or not rev:
+                continue
+            margins.append(round(float(op) / float(rev) * 100, 1))
+            if len(margins) == 4:
+                break
+        return margins
+    except Exception:
+        return []
+
+
+def _insider_counts_24m(stock) -> tuple[int | None, int | None, int | None]:
+    """
+    Open-market insider purchases, sales, and rows Yahoo lists without any
+    description (so they cannot be classified) over ~2 years — about as far back
+    as Yahoo's list goes.
+    """
+    try:
+        tx = stock.insider_transactions
+        if tx is None or tx.empty or "Text" not in tx.columns:
+            return None, None, None
+        if "Start Date" in tx.columns:
+            dates = pd.to_datetime(tx["Start Date"], errors="coerce")
+            if getattr(dates.dt, "tz", None) is not None:
+                dates = dates.dt.tz_localize(None)
+            tx = tx[dates >= pd.Timestamp.now() - pd.Timedelta(days=730)]
+        text = tx["Text"].fillna("").astype(str).str.strip()
+        buys = int(text.str.contains("Purchase", case=False).sum())
+        sells = int(text.str.contains("Sale at price", case=False).sum())
+        return buys, sells, int((text == "").sum())
+    except Exception:
+        return None, None, None
+
+
+def _dividend_cut(stock) -> bool | None:
+    """True if the latest dividend is >15% below the median of the four before it, or regular payments stopped."""
+    try:
+        divs = stock.dividends
+        if divs is None or len(divs) < 5:
+            return None
+        idx = pd.DatetimeIndex(divs.index)
+        if idx.tz is not None:
+            idx = idx.tz_localize(None)
+        divs = pd.Series(divs.values, index=idx).sort_index()
+        now = pd.Timestamp.now()
+        if divs[divs.index >= now - pd.Timedelta(days=400)].empty:
+            # Paid regularly, then went silent: that is a cut to zero
+            return True if len(divs[divs.index >= now - pd.Timedelta(days=800)]) >= 3 else None
+        return bool(float(divs.iloc[-1]) < 0.85 * float(divs.iloc[-5:-1].median()))
+    except Exception:
+        return None
+
+
+def _compute_checklist_metrics(stock, info: dict) -> dict:
+    """The trend data behind the investor's checklist: inventories, share count, debt, margins, insiders."""
+    try:
+        qbs = stock.quarterly_balance_sheet
+    except Exception:
+        qbs = None
+    try:
+        qfin = stock.quarterly_financials
+    except Exception:
+        qfin = None
+
+    margins = _quarterly_op_margins(qfin)
+    buys, sells, unclassified = _insider_counts_24m(stock)
+    first_trade_ms = _safe_get(info, "firstTradeDateMilliseconds")
+    return {
+        "inventory_growth_yoy": _round(_quarter_yoy(qbs, "Inventory")),
+        "quarterly_revenue_growth_yoy": _round(_quarter_yoy(qfin, "Total Revenue")),
+        "shares_change_yoy": _round(_quarter_yoy(qbs, "Ordinary Shares Number")),
+        "debt_change_yoy": _round(_quarter_yoy(qbs, "Total Debt")),
+        "op_margin_quarters_pct": margins or None,
+        "op_margin_declining_3q": (margins[0] < margins[1] < margins[2] < margins[3]) if len(margins) >= 4 else None,
+        "insider_buys_24m": buys,
+        "insider_sells_24m": sells,
+        "insider_unclassified_24m": unclassified,
+        "dividend_cut": _dividend_cut(stock),
+        "analyst_count": _safe_get(info, "numberOfAnalystOpinions"),
+        "years_listed": round((time.time() * 1000 - first_trade_ms) / (365.25 * 86_400_000), 1) if first_trade_ms else None,
+    }
+
+
+def _monthly_returns(closes: pd.Series) -> pd.Series:
+    idx = pd.DatetimeIndex(closes.index)
+    if idx.tz is not None:
+        idx = idx.tz_localize(None)
+    series = pd.Series(closes.values, index=idx.to_period("M"))
+    series = series[~series.index.duplicated(keep="last")]
+    return series.pct_change().dropna()
+
+
+def get_spy_monthly_returns() -> pd.Series | None:
+    """S&P 500 monthly returns over ~11 years, fetched once per batch for seasonality comparisons."""
+    try:
+        closes = yf.Ticker("SPY").history(period="11y", interval="1mo", auto_adjust=True)["Close"].dropna()
+        return _monthly_returns(closes)
+    except Exception:
+        return None
+
+
+def _compute_seasonality(stock, spy_monthly: pd.Series | None) -> dict | None:
+    """
+    How this calendar window (this month + next) went in past years, vs the S&P 500.
+    A weak signal by design — shown as context, never used for scoring.
+    """
+    if spy_monthly is None or spy_monthly.empty:
+        return None
+    try:
+        own = _monthly_returns(stock.history(period="11y", interval="1mo", auto_adjust=True)["Close"].dropna())
+    except Exception:
+        return None
+
+    today = datetime.now(timezone.utc)
+    first = pd.Period(year=today.year, month=today.month, freq="M")
+    excess = []
+    for years_back in range(1, 12):
+        months = [first - 12 * years_back, first - 12 * years_back + 1]
+        if any(m not in own.index or m not in spy_monthly.index for m in months):
+            continue
+        own_r = (1 + own[months[0]]) * (1 + own[months[1]]) - 1
+        spy_r = (1 + spy_monthly[months[0]]) * (1 + spy_monthly[months[1]]) - 1
+        excess.append(float(own_r - spy_r) * 100)
+    if len(excess) < 5:
+        return None
+
+    s = pd.Series(excess)
+    return {
+        "window": f"{MONTHS_HR[first.month - 1]}–{MONTHS_HR[(first + 1).month - 1]}",
+        "years": len(excess),
+        "median_excess_pp": round(float(s.median()), 1),
+        "beat_spy_years": int((s > 0).sum()),
+        "best_excess_pp": round(float(s.max()), 1),
+        "worst_excess_pp": round(float(s.min()), 1),
+    }
+
+
 def get_spy_return_6m() -> float | None:
     """Fetches the S&P 500's 6-month return once per batch, for relative-strength comparisons."""
     try:
@@ -126,7 +297,11 @@ def get_spy_return_6m() -> float | None:
         return None
 
 
-def fetch_fundamentals(ticker: str, spy_return_6m: float | None = None) -> dict:
+def fetch_fundamentals(
+    ticker: str,
+    spy_return_6m: float | None = None,
+    spy_monthly: pd.Series | None = None,
+) -> dict:
     """
     Returns fundamental metrics for a ticker.
     Uses cache if data is <24h old; fetches from yfinance otherwise.
@@ -238,6 +413,10 @@ def fetch_fundamentals(ticker: str, spy_return_6m: float | None = None) -> dict:
         relative_strength_6m = _compute_relative_strength(stock, spy_return_6m)
         news_headlines = _fetch_news_headlines(stock)
 
+        # --- The investor's checklist trends and calendar seasonality ---
+        checklist_metrics = _compute_checklist_metrics(stock, info)
+        seasonality = _compute_seasonality(stock, spy_monthly)
+
         data = {
             "symbol": symbol,
             "name": _safe_get(info, "longName", symbol),
@@ -262,7 +441,8 @@ def fetch_fundamentals(ticker: str, spy_return_6m: float | None = None) -> dict:
             "roe": roe,
             "roa": roa,
             # Balance sheet
-            "debt_equity": debt_equity,
+            "debt_equity": debt_equity,  # yfinance percent: 49.0 means 0.49x (used by scorer thresholds)
+            "debt_to_equity_x": round(debt_equity / 100, 3) if debt_equity is not None else None,
             "current_ratio": current_ratio,
             "quick_ratio": quick_ratio,
             "cash_per_share": cash_per_share,
@@ -301,6 +481,8 @@ def fetch_fundamentals(ticker: str, spy_return_6m: float | None = None) -> dict:
             "altman_z_score": altman_z_score,
             "relative_strength_6m": relative_strength_6m,
             "news_headlines": news_headlines,
+            "seasonality": seasonality,
+            **checklist_metrics,
             # Metadata
             "fetch_error": None,
             "cached": False,
@@ -331,8 +513,9 @@ def fetch_multiple(tickers: list[str], delay_seconds: float = 1.0) -> dict[str, 
     Returns a dict keyed by ticker symbol.
     """
     spy_return_6m = get_spy_return_6m()
+    spy_monthly = get_spy_monthly_returns()
     results = {}
     for ticker in tickers:
-        results[ticker.upper()] = fetch_fundamentals(ticker, spy_return_6m=spy_return_6m)
+        results[ticker.upper()] = fetch_fundamentals(ticker, spy_return_6m=spy_return_6m, spy_monthly=spy_monthly)
         time.sleep(delay_seconds)
     return results

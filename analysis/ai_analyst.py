@@ -1,14 +1,16 @@
 """
-AI analyst module: synthesizes fundamental scores, StockTwits sentiment, insider and
-Congress activity into actionable stock recommendations using claude-haiku-4-5.
+AI analyst module: turns fundamentals, the investor's own checklist, cycle/season
+context, the model's previous calls on the same stock, StockTwits sentiment,
+insider and Congress activity into structured recommendations.
+
+Haiku 4.5 does the routine analysis. A SELL/REDUCE on a position the investor
+holds is re-checked by REVIEW_MODEL (see run_weekly.apply_sell_guard).
 Every recommendation is compared against "do nothing / hold cash / add to best position".
 """
 
 import json
 import os
 import re
-from datetime import datetime
-from typing import Any
 
 import anthropic
 from dotenv import load_dotenv
@@ -16,6 +18,19 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MODEL = "claude-haiku-4-5-20251001"
+# Only re-checks sell calls on held positions that passed the deterministic sell
+# guard — a handful of calls a month, so the stronger model costs cents.
+REVIEW_MODEL = "claude-sonnet-5"
+
+BULLISH_ACTIONS = {"BUY_BELOW", "ADD_ON_DIP"}
+BEARISH_ACTIONS = {"SELL", "REDUCE"}
+HELD_ACTIONS = "HOLD|ADD_ON_DIP|REDUCE|SELL"
+NOT_HELD_ACTIONS = "BUY_BELOW|WATCHLIST|WAIT|NO_ACTION"
+
+# Dropped from the fundamentals JSON sent to the model. debt_equity is yfinance's
+# percent figure (49.0 means 0.49x) and was repeatedly read as "49x, extreme";
+# debt_to_equity_x replaces it.
+_PROMPT_DROP_KEYS = {"debt_equity", "fetch_error", "cached"}
 
 
 # --- Evidence table formatters ---
@@ -69,70 +84,132 @@ def _ev_price(val) -> str:
         return str(val)
 
 
+def _debt_to_equity_x(fundamentals: dict) -> float | None:
+    de_x = fundamentals.get("debt_to_equity_x")
+    if de_x is None and fundamentals.get("debt_equity") is not None:
+        de_x = float(fundamentals["debt_equity"]) / 100  # cache entries written before the field existed
+    return de_x
+
+
 def _sanitize_cyrillic(text: str) -> str:
     """Remove Cyrillic characters that occasionally sneak into Claude's Croatian output."""
     return re.sub(r"[Ѐ-ӿ]", "", text)
+
+
+def _response_text(response) -> str:
+    """Joins the text blocks — with adaptive thinking the first block is a thinking block."""
+    return "".join(block.text for block in response.content if getattr(block, "type", "") == "text").strip()
+
+
+def _extract_json(raw_text: str) -> dict:
+    text = raw_text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+    start, end = text.index("{"), text.rindex("}") + 1
+    return json.loads(text[start:end])
+
 
 SYSTEM_PROMPT = """Ti si disciplinirani analitičar dioničkog tržišta koji piše na HRVATSKOM jeziku (uz financijske termine na engleskom: FCF, EBITDA, P/E, Debt/Equity, itd.).
 
 KONTEKST ULAGAČA:
 - Ulagač iz Hrvatske, platforma Revolut Basic
-- UKUPNI KAPITAL: stvarna vrijednost portfelja bit će navedena u promptu (tipično 15.000-20.000 EUR)
-- Može koristiti cijeli kapital: prodati dio VG i reinvestirati, ili koristiti novi novac (300-400 EUR/mj)
+- UKUPNI KAPITAL: vrijednost pozicija + gotovina, naveden u promptu
+- Može koristiti gotovinu, prodati dio pozicija i reinvestirati, ili uložiti novi novac (300-400 EUR/mj)
 - NEMOJ tretirati ulagača kao da ima samo 300 EUR — to je NOVI novac koji dolazi, nije ukupni kapital
 - 3-4 transakcija mjesečno maksimalno
 
 OSNOVNA FILOZOFIJA:
 - Dosadni, profitabilni i podcijenjeni biznisi ispred hype-a
-- Svaka preporuka mora biti bolja od "ne raditi ništa" ili "povećati najboljuu postojeću poziciju"
+- Svaka preporuka mora biti bolja od "ne raditi ništa" ili "povećati najbolju postojeću poziciju"
 - "Nema kupnje ovaj tjedan" je validan i čest output — nije neuspjeh
-- Hype je anti-signal: ako je hype_score >= 7 (StockTwits), maksimalna akcija je WATCHLIST, nikad BUY
+- Hype je anti-signal: ako je hype_score >= 7 (StockTwits), nema kupnje
 - Kongresne kupnje/prodaje su slabi signali — samo izvor ideja (prijave kasne 30-45 dana)
-- VAŽNO: Ako ulagač ima osobnu tezu za postojeću poziciju (geopolitika, sektorski trendovi), POŠTUJ tu tezu — ne preporučuj SELL bez iznimno jakog razloga
+- Ako ulagač ima osobnu tezu za poziciju, POŠTUJ je — ne preporučuj SELL bez razloga koji joj izravno proturječi
 
 VALUTA PRAVILO:
-- BUY ZONE i TARGET PRICE uvijek u USD s $ znakom (npr. "< $25.00") jer su sve dionice NYSE/NASDAQ listed i kotiraju u USD
-- Position size izražen kao % portfelja I kao EUR iznos (koji će biti izračunat u promptu na temelju stvarne vrijednosti portfelja)
+- BUY ZONE i TARGET PRICE uvijek u USD s $ znakom (npr. "< $25.00") jer sve dionice kotiraju u USD
+- Position size kao % portfelja I kao EUR iznos (iznosi su izračunati u promptu)
 - NIKAD ne koristiti EUR za buy_zone ili target_price
 
-VELIČINA POZICIJE (uvijek baziraj na stvarnoj vrijednosti portfelja iz prompta):
-- mala: 3-5% portfelja — spekulativno, prvi ulazak, niski confidence, hidden gems
+VELIČINA POZICIJE (jedina pravila; EUR iznosi su u promptu):
+- mala: 3-5% portfelja — spekulativno, prvi ulazak, niži confidence
 - normalna: 7-10% portfelja — solidno uvjerenje, dobar risk/reward
 - velika: 12-20% portfelja — visoko uvjerenje, jasna podcijenjenost
+- hidden gem: najviše 1-2% portfelja — gubitak 70-100% je moguć
+- Ne ulaziti sve u jednu novu dionicu — diversifikacija je ključna
 - Revolut naplaćuje ~1.5% FX konverziju (EUR→USD) — minimalni upside za isplativost je 5%+
+
+BUY ZONE:
+- Temelji je na procjeni vrijednosti (forward P/E vs sektor i vlastita povijest, FCF yield, PEG), NE na postotku ispod trenutne cijene
+- Ne spuštaj zonu samo zato što je cijena pala; ako mijenjaš zonu u odnosu na zadnju analizu, objasni zašto u change_vs_last
+
+AKCIJE:
+- Dionice koje ulagač NE drži: BUY_BELOW, WATCHLIST, WAIT, NO_ACTION
+- Dionice koje ulagač DRŽI: HOLD (zadano), ADD_ON_DIP, REDUCE, SELL
+- HOLD je normalan ishod za dobru poziciju — ne traži akciju radi akcije
 
 STROGA PRAVILA:
 1. Preporučuj samo dionice dostupne na Revolut platformi
-2. Preporučuj BUY_BELOW samo s konkretnom cijenom u USD, nikad otvoreni "kupi odmah"
-3. Ako je confidence < 6, output mora biti WAIT ili WATCHLIST
+2. BUY_BELOW samo s konkretnom cijenom u USD, nikad otvoreni "kupi odmah"
+3. Ako je confidence < 6, nema kupnje: WAIT ili WATCHLIST (HOLD za poziciju koju ulagač drži)
 4. Maksimalno 4-7 akcija po newsletteru
 5. Poslovni model mora biti objašnjiv u 2-3 rečenice
-6. NE preporučuj ako: hype bez fundamentala, dug raste brže od prihoda, marže padaju bez jasnog razloga
+6. NE preporučuj kupnju ako: hype bez fundamentala, dug raste brže od prihoda, marže padaju bez jasnog razloga
 
-VELIČINA POZICIJE (od dostupnog kapitala):
-- mala: 5-10% portfelja (spekulativno, prvi ulazak, niski confidence)
-- normalna: 10-15% portfelja (solidno uvjerenje, dobar risk/reward)
-- velika: 15-25% portfelja (visoko uvjerenje, jasno podcijenjenost)
-- Ne ulaziti sve u jednu novu dionicu — diversifikacija je ključna
-
-SIGNALI ZA PRODAJU (preporuči SELL ili REDUCE samo ako):
-- Fundamentalna teza se promijenila (biznis se pogoršava, ne samo cijena)
+SIGNALI ZA PRODAJU (SELL ili REDUCE samo ako se promijenila VRIJEDNOST, ne cijena):
+- Poslovanje se pogoršava: prihod pada, operativne marže padaju 3+ uzastopna kvartala, dobit pada
 - Dug raste >20% YoY bez rasta prihoda
-- Operativne marže padaju 3+ uzastopna kvartala
-- Problem s managementom ili masovna prodaja insajdera
-- Valuacija postala ekstremna (dionica daleko iznad fer vrijednosti)
+- Zalihe rastu 2x brže od prodaje
 - Dividenda se reže
-- Zalihe rastu puno brže od prodaje
+- Problem s managementom
+- Valuacija postala ekstremna (daleko iznad fer vrijednosti)
+- Pad cijene, negativna relativna snaga ili loš sentiment SAMI NISU razlog za prodaju
+- Sustav automatski blokira SELL/REDUCE za pozicije u portfelju ako podaci ne pokazuju pogoršanje poslovanja
 
-DODATNI SIGNALI U FUNDAMENTALNIM PODACIMA (automatski izračunati, ne moraš ih sam procjenjivati):
-- altman_z_score: Altman Z-Score (rizik bankrota). Z > 2.99 sigurno, 1.81-2.99 sivo, < 1.81 distress zona. Za speculative_growth kategoriju nizak Z je uobičajen (rana faza, još nije profitabilna) — ne penaliziraj automatski, ali spomeni u red_flags ako je ekstremno nizak (< 0).
-- relative_strength_6m: Performanse dionice minus S&P 500 performanse u zadnjih 6 mjeseci, u postotnim poenima. Pozitivno = nadmašuje tržište (momentum u prilog), negativno = zaostaje.
-- news_headlines: nedavni naslovi vijesti (yfinance) — nisu nužno svi relevantni za ovu dionicu specifično, procijeni sam ton i relevantnost.
+CIKLIČKE I SEZONSKE DIONICE:
+- Prvo odredi tip: spori rast, brzi rast, ciklička, turnaround
+- Kod cikličkih: visok trailing P/E na dnu ciklusa uz nizak forward P/E znači oporavak dobiti, ne skupoću; nizak P/E na vrhu ciklusa je upozorenje; prati zalihe
+- Uzmi u obzir sezonu i pokretače iz bloka CIKLUS I SEZONA; povijesna sezonalnost je slab signal i tržište je već zna
+
+PODACI (automatski izračunati):
+- debt_to_equity_x: dug/kapital kao omjer (0.49 = dug iznosi 49% kapitala — umjereno, NIJE 49x)
+- altman_z_score: rizik bankrota. Z > 2.99 sigurno, 1.81-2.99 sivo, < 1.81 distress. Za speculative_growth nizak Z je uobičajen — spomeni u red_flags samo ako je ekstremno nizak (< 0). Ne vrijedi za banke, osiguranja, REIT-ove i utility
+- relative_strength_6m: dionica minus S&P 500 u zadnjih 6 mjeseci, u postotnim poenima
+- inventory_growth_yoy, shares_change_yoy, debt_change_yoy, quarterly_revenue_growth_yoy: zadnji kvartal vs isti kvartal godinu ranije
+- insider_buys_24m / insider_sells_24m: kupnje/prodaje insidera na tržištu u ~2 godine
+- seasonality: isti kalendarski prozor u prošlim godinama vs S&P 500
+- news_headlines: nedavni naslovi — procijeni sam relevantnost
 
 OUTPUT FORMAT: Vraćaj SAMO valjani JSON, bez markdowna, bez teksta izvan JSONa.
-Svi tekstualni opisi (thesis, catalyst, downside_scenario, itd.) MORAJU biti na HRVATSKOM jeziku.
+Svi tekstualni opisi MORAJU biti na HRVATSKOM jeziku.
 
 PISMO: Koristi ISKLJUČIVO latinična slova (a-z, A-Z, hrvatska dijakritika: č,ć,š,ž,đ). NIKAD ne koristi ćirilična slova."""
+
+
+def _position_guide(portfolio_value_eur: float | None) -> str:
+    if not portfolio_value_eur or portfolio_value_eur <= 0:
+        return ("VELIČINA POZICIJE: vrijednost portfelja nepoznata — koristi postotke "
+                "(mala 3-5%, normalna 7-10%, velika 12-20%, hidden gem 1-2%)")
+    v = portfolio_value_eur
+    return (
+        f"VELIČINA POZICIJE (ukupni kapital ≈ €{v:,.0f}):\n"
+        f"  - mala (3-5%): €{v * 0.03:,.0f}–€{v * 0.05:,.0f} — spekulativno/prvi ulazak\n"
+        f"  - normalna (7-10%): €{v * 0.07:,.0f}–€{v * 0.10:,.0f} — solidno uvjerenje\n"
+        f"  - velika (12-20%): €{v * 0.12:,.0f}–€{v * 0.20:,.0f} — visoko uvjerenje\n"
+        f"  - hidden gem (1-2%): €{v * 0.01:,.0f}–€{v * 0.02:,.0f}"
+    )
+
+
+def _normalize_action(result: dict, in_portfolio: bool) -> None:
+    """HOLD/REDUCE/SELL only make sense for stocks the investor owns, BUY_BELOW only for new ones."""
+    if in_portfolio:
+        mapping = {"BUY_BELOW": "ADD_ON_DIP", "WATCHLIST": "HOLD", "WAIT": "HOLD", "NO_ACTION": "HOLD"}
+    else:
+        mapping = {"ADD_ON_DIP": "BUY_BELOW", "HOLD": "WAIT", "SELL": "NO_ACTION", "REDUCE": "NO_ACTION"}
+    if result.get("action") in mapping:
+        result["action"] = mapping[result["action"]]
 
 
 def analyze_stock(
@@ -152,11 +229,21 @@ def analyze_stock(
     macro_context: str | None = None,
     portfolio_value_eur: float | None = None,
     lessons_context: str | None = None,
+    in_portfolio: bool = False,
+    position_line: str | None = None,
+    sell_triggers: str | None = None,
+    previous_calls: str | None = None,
+    checklist_text: str | None = None,
+    cycle_context: str | None = None,
+    investor_profile: str | None = None,
+    model: str = MODEL,
+    review_note: str | None = None,
 ) -> dict:
     """
     Analyzes a single stock and returns a structured recommendation dict.
     """
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    symbol = fundamentals.get("symbol", "")
 
     congress_buys = (congress_signal or {}).get("buy_count", 0)
     congress_sells = (congress_signal or {}).get("sell_count", 0)
@@ -180,7 +267,7 @@ def analyze_stock(
     earnings_date = fundamentals.get("next_earnings_date", "N/A")
     if earnings_days is not None:
         if 0 <= earnings_days <= 7:
-            earnings_block = f"\n⚠️ UPOZORENJE: Earnings za {earnings_days} dana ({earnings_date}) — VISOK rizik volatilnosti! Ne preporučaj BUY tik pred earnings osim s iznimno visokim uvjerenjem."
+            earnings_block = f"\n⚠️ UPOZORENJE: Earnings za {earnings_days} dana ({earnings_date}) — VISOK rizik volatilnosti! Ne preporučaj kupnju tik pred earnings osim s iznimno visokim uvjerenjem."
         elif 8 <= earnings_days <= 30:
             earnings_block = f"\nINFO: Earnings za {earnings_days} dana ({earnings_date}) — napomeni u thesis."
 
@@ -189,46 +276,24 @@ def analyze_stock(
     week52_pos = fundamentals.get("week_52_position_pct")
     if week52_pos is not None:
         if week52_pos >= 85:
-            week52_block = f"\n⚠️ 52-TJEDNA POZICIJA: {week52_pos:.0f}% od godišnjeg vrha — dionica je blizu vrha, postavi konzervativniji buy_zone i manji position size."
+            week52_block = f"\n⚠️ 52-TJEDNA POZICIJA: {week52_pos:.0f}% od godišnjeg raspona — dionica je blizu vrha, postavi konzervativniji buy_zone i manji position size."
         elif week52_pos <= 15:
-            week52_block = f"\nINFO 52-tjedna pozicija: {week52_pos:.0f}% od godišnjeg vrha — dionica je blizu godišnjeg dna, potencijalna value kupnja ako su fundamentali solidni."
+            week52_block = f"\nINFO 52-tjedna pozicija: {week52_pos:.0f}% od godišnjeg raspona — dionica je blizu godišnjeg dna, potencijalna value prilika ako su fundamentali solidni."
 
-    # Watchlist cross-check
-    watchlist_block = ""
-    if watchlist_context:
-        watchlist_block = f"\nWATCHLIST POVIJEST: {watchlist_context}"
+    watchlist_block = f"\nWATCHLIST POVIJEST: {watchlist_context}" if watchlist_context else ""
+    sector_block = f"\nSEKTORSKA KONCENTRACIJA: {sector_note}" if sector_note else ""
+    macro_block = f"\n{macro_context}" if macro_context else ""
+    lessons_block = (
+        f"\nNAUČENE LEKCIJE IZ PROŠLIH PREPORUKA (kvartalni self-review):\n{lessons_context}"
+        if lessons_context else ""
+    )
 
-    # Sector concentration note
-    sector_block = ""
-    if sector_note:
-        sector_block = f"\nSEKTORSKA KONCENTRACIJA: {sector_note}"
-
-    # Macro context block
-    macro_block = ""
-    if macro_context:
-        macro_block = f"\n{macro_context}"
-
-    # Quarterly self-review lessons (calibration notes from past decisions)
-    lessons_block = ""
-    if lessons_context:
-        lessons_block = f"\nNAUČENE LEKCIJE IZ PROŠLIH PREPORUKA (kvartalni self-review):\n{lessons_context}"
-
-    # Dynamic position size ranges based on actual portfolio value
-    if portfolio_value_eur and portfolio_value_eur > 0:
-        small_low  = round(portfolio_value_eur * 0.03)
-        small_high = round(portfolio_value_eur * 0.05)
-        norm_low   = round(portfolio_value_eur * 0.07)
-        norm_high  = round(portfolio_value_eur * 0.10)
-        full_low   = round(portfolio_value_eur * 0.12)
-        full_high  = round(portfolio_value_eur * 0.20)
-        pos_size_guide = (
-            f"VELIČINA POZICIJE (bazirano na portfelju od ~€{portfolio_value_eur:,.0f}):\n"
-            f"  - mala (3-5%): €{small_low:,}–€{small_high:,} — spekulativno/hidden gem\n"
-            f"  - normalna (7-10%): €{norm_low:,}–€{norm_high:,} — solidno uvjerenje\n"
-            f"  - velika (12-20%): €{full_low:,}–€{full_high:,} — visoko uvjerenje"
-        )
+    if in_portfolio:
+        holding_block = f"\n📌 ULAGAČ DRŽI OVU DIONICU. {position_line or ''}\nDopuštene akcije: HOLD (zadano), ADD_ON_DIP, REDUCE, SELL."
+        allowed_actions = HELD_ACTIONS
     else:
-        pos_size_guide = "VELIČINA POZICIJE: portfelj ~€15.000 — mala: €450-750, normalna: €1.050-1.500, velika: €1.800-3.000"
+        holding_block = "\nUlagač NE drži ovu dionicu. Dopuštene akcije: BUY_BELOW, WATCHLIST, WAIT, NO_ACTION."
+        allowed_actions = NOT_HELD_ACTIONS
 
     gem_context = ""
     if is_hidden_gem:
@@ -238,86 +303,117 @@ def analyze_stock(
 - Vremenski horizont: 5-10 godina (ne 6-18 mjeseci kao za mainstream dionice)
 - Primjer referentnog scenarija: Nvidia 2016-2017, Amazon 2003-2005, Microsoft 2012-2014
 - Dopuštene akcije: WATCHLIST (idealno za praćenje), BUY_BELOW s malom pozicijom, ili WAIT
-- Pozicija mora biti SMALL (max 50-80 EUR) jer je rizik visok — ovo je spekulativna oklada
+- Pozicija najviše 1-2% portfelja jer je rizik visok — ovo je spekulativna oklada
 - Ako nema jasne poslovne teze ili je market cap < $50M, preporuči WAIT
 - Naglasi: "Ovo je visoko rizična spekulativna pozicija. Gubitak 70-100% je moguć."
 """
 
     personal_context = ""
-    if personal_thesis or macro_view or do_not_sell_until:
+    if personal_thesis or macro_view or do_not_sell_until or sell_triggers:
         personal_context = f"""
 ULAGAČEVA OSOBNA TEZA ZA OVU DIONICU (OBAVEZNO POŠTUJ):
 - Osobna teza: {personal_thesis or 'nije definirana'}
 - Makro pogled: {macro_view or 'nije definiran'}
 - Ne prodavati dok: {do_not_sell_until or 'nije definirano'}
-UPOZORENJE: Ne preporučuj SELL ili REDUCE bez iznimno jakog razloga koji direktno proturječi ovoj tezi.
+- Što bi ulagača natjeralo na prodaju: {sell_triggers or 'nije definirano'}
+UPOZORENJE: Ne preporučuj SELL ili REDUCE ako se nije ostvario neki od ulagačevih razloga za prodaju ili ako podaci izravno ne pobijaju tezu.
 """
 
+    review_block = f"\n🔎 DRUGA PROVJERA PRODAJE:\n{review_note}" if review_note else ""
+    previous_block = (
+        f"\n{previous_calls}" if previous_calls
+        else "\nTVOJE PRETHODNE ANALIZE: nema (prva analiza ove dionice u zadnjih 60 dana)."
+    )
+    checklist_block = f"\n{checklist_text}" if checklist_text else ""
+    cycle_block = f"\nCIKLUS I SEZONA:\n{cycle_context}" if cycle_context else ""
+
     # Pre-format evidence table values — prevents raw floats appearing in Claude's output
-    _f_price    = _ev_price(fundamentals.get("current_price"))
-    _f_pe       = _ev(fundamentals.get("pe"), decimals=1)
-    _f_fwd_pe   = _ev(fundamentals.get("forward_pe"), decimals=1)
-    _f_peg      = _ev(fundamentals.get("peg"), decimals=2)
-    _f_de       = _ev(fundamentals.get("debt_equity"), decimals=1)
-    _f_rev      = _ev_growth(fundamentals.get("revenue_growth_yoy"))
-    _f_fcf      = _ev_pct(fundamentals.get("fcf_yield"), decimals=2)
-    _f_margin   = _ev_pct_decimal(fundamentals.get("op_margin"))
-    _f_st       = (
+    de_x = _debt_to_equity_x(fundamentals)
+    _f_price = _ev_price(fundamentals.get("current_price"))
+    _f_pe = _ev(fundamentals.get("pe"), decimals=1)
+    _f_fwd_pe = _ev(fundamentals.get("forward_pe"), decimals=1)
+    _f_peg = _ev(fundamentals.get("peg"), decimals=2)
+    _f_de = _ev(de_x, decimals=2, suffix="x")
+    _f_rev = _ev_growth(fundamentals.get("revenue_growth_yoy"))
+    _f_fcf = _ev_pct(fundamentals.get("fcf_yield"), decimals=2)
+    _f_margin = _ev_pct_decimal(fundamentals.get("op_margin"))
+    _f_st = (
         f"{sentiment_signal.get('bullish_pct', 0):.0f}%↑ / "
         f"{sentiment_signal.get('bearish_pct', 0):.0f}%↓ | "
         f"hype: {sentiment_hype}/10"
         if sentiment_signal else "N/A"
     )
-    _f_earn     = (f"{earnings_days}d ({earnings_date})" if earnings_days is not None else "N/A")
+    _f_earn = (f"{earnings_days}d ({earnings_date})" if earnings_days is not None else "N/A")
+    seasonality = fundamentals.get("seasonality")
+    _f_season = (
+        f"{seasonality['window']}: medijan {seasonality['median_excess_pp']:+.1f} pp vs S&P, "
+        f"{seasonality['beat_spy_years']}/{seasonality['years']} god."
+        if seasonality else "N/A"
+    )
+
+    prompt_fund = {k: v for k, v in fundamentals.items() if k not in _PROMPT_DROP_KEYS and v is not None}
+    if de_x is not None:
+        prompt_fund["debt_to_equity_x"] = round(de_x, 2)
+    breakdown = ", ".join(
+        f"{name}={b.get('raw')}×{b.get('weight')}"
+        for name, b in (score_result.get("breakdown") or {}).items()
+    )
 
     user_prompt = f"""Analiziraj ovu dionicu i vrati JSON preporuku NA HRVATSKOM JEZIKU (financijski termini mogu ostati na engleskom).
 
 DATUM: {current_date}
 {macro_block}
 {lessons_block}
-{pos_size_guide}
-{gem_context}{personal_context}{earnings_block}{week52_block}{watchlist_block}{sector_block}{sentiment_block}
+{_position_guide(portfolio_value_eur)}
+{holding_block}{gem_context}{personal_context}{review_block}{earnings_block}{week52_block}{watchlist_block}{sector_block}{sentiment_block}
+{previous_block}
+{checklist_block}
+{cycle_block}
 
 FUNDAMENTALNI PODACI:
-{json.dumps(fundamentals, indent=2, default=str)}
+{json.dumps(prompt_fund, ensure_ascii=False, separators=(",", ":"), default=str)}
 
-FUNDAMENTAL SCORE: {score_result.get('total_score', 0)}/100 (category: {score_result.get('category', 'unknown')})
-Score breakdown: {json.dumps(score_result.get('breakdown', {}), indent=2)}
+FUNDAMENTAL SCORE: {score_result.get('total_score', 0)}/100 (kategorija: {score_result.get('category', 'unknown')})
+Score breakdown (ocjena 0-5 × težina): {breakdown}
 
-CONGRESS TRADES (last 14 days — weak signal):
-- Members buying: {congress_buys}
-- Members selling: {congress_sells}
-- Note: {(congress_signal or {}).get('note', 'No recent congress trades')}
+CONGRESS TRADES (zadnjih 14 dana — slab signal):
+- Članovi kupuju: {congress_buys}
+- Članovi prodaju: {congress_sells}
+- Napomena: {(congress_signal or {}).get('note', 'Nema nedavnih kongresnih trgovanja')}
 
-INSIDER TRADING (SEC Form 4, open-market buy/sell only, last 14 days — fresher and stronger signal than Congress, 2-day disclosure lag):
+INSIDER TRADING (SEC Form 4, kupnje/prodaje na tržištu, zadnjih 14 dana — svježiji signal od Kongresa, 2 dana kašnjenja):
 - {_f_insider}
 
 INVESTOR PORTFOLIO CONTEXT:
 {portfolio_context}
 
-Return ONLY this JSON structure (no markdown, no text outside JSON):
+Vrati SAMO ovu JSON strukturu (bez markdowna, bez teksta izvan JSONa):
 {{
-  "ticker": "{fundamentals.get('ticker', fundamentals.get('symbol', ''))}",
+  "ticker": "{symbol}",
   "company_name": "{fundamentals.get('name', '')}",
   "category": "<quality_compounder|value_cyclical|turnaround|speculative_growth|dividend_defensive>",
-  "action": "<BUY_BELOW|ADD_ON_DIP|WAIT|WATCHLIST|SELL|REDUCE|NO_ACTION>",
-  "buy_zone": "<e.g. '< $25.00' or 'N/A'>",
-  "target_price": "<e.g. '$32.00' or 'N/A'>",
-  "position_size": "<npr. 'mala (3-5% / €500-750)' ili 'normalna (7-10% / €1.050-1.500)' ili 'velika (12-20% / €2.000-3.000)' — koristi stvarne iznose iz VELIČINA POZICIJE gore>",
-  "business_explanation": "<2 sentences: what the company does and how it makes money>",
-  "investment_thesis": "<max 3 sentences: why this stock, why now>",
-  "valuation_verdict": "<cheap/fair/expensive vs sector with 2-3 key numbers, 1 sentence>",
-  "catalyst": "<specific event or trend that could unlock value in 6-18 months, 1 sentence>",
-  "downside_scenario": "<what must go wrong to lose 30-50% — specific, 1-2 sentences>",
-  "vs_cash_alternative": "<better than doing nothing / than adding to best existing position? 1-2 sentences>",
+  "action": "<{allowed_actions}>",
+  "buy_zone": "<npr. '< $25.00' ili 'N/A'>",
+  "target_price": "<npr. '$32.00' ili 'N/A'>",
+  "position_size": "<npr. 'mala (3-5% / €500-750)' — stvarni iznosi iz VELIČINA POZICIJE; 'N/A' za HOLD/WAIT/WATCHLIST>",
+  "business_explanation": "<2 rečenice: čime se firma bavi i kako zarađuje>",
+  "investment_thesis": "<max 3 rečenice: zašto ova dionica, zašto sada>",
+  "valuation_verdict": "<jeftina/fer/skupa vs sektor s 2-3 ključne brojke, 1 rečenica>",
+  "cycle_view": "<gdje je dionica u ciklusu/sezoni i što to znači za idućih 3-6 mjeseci, 1 rečenica; 'nije ciklička' ako nije>",
+  "investor_view": "<kako bi ULAGAČ ocijenio dionicu kroz svoj checklist i makro pogled, 1-2 rečenice; 'N/A' ako profil ulagača nije naveden>",
+  "counter_argument": "<najjači protuargument ulagačevom pogledu — podaci, povijest, što tržište već zna, 1-2 rečenice; 'N/A' ako profil nije naveden>",
+  "change_vs_last": "<što se promijenilo od tvoje zadnje analize (brojke/činjenice) i zašto akcija ostaje ili se mijenja, 1 rečenica; 'prva analiza' ako je nema>",
+  "catalyst": "<konkretan događaj ili trend koji može otključati vrijednost u 6-18 mjeseci, 1 rečenica>",
+  "downside_scenario": "<što mora poći po zlu za gubitak 30-50%, konkretno, 1-2 rečenice>",
+  "vs_cash_alternative": "<je li bolje od ne raditi ništa / od dodavanja u najbolju postojeću poziciju, 1-2 rečenice>",
   "thesis_breakers": ["<uvjet 1 koji bi poništio tezu — kratko>", "<uvjet 2>"],
-  "red_flags": ["<1-3 specific concerns, each a short phrase>"],
-  "hype_override": <true if hype_score >= 7 forced downgrade>,
-  "confidence": <integer 1-10>,
+  "red_flags": ["<1-3 konkretna rizika, kratko>"],
+  "hype_override": <true ako je hype_score >= 7 spustio akciju>,
+  "confidence": <cijeli broj 1-10>,
   "revolut_available": true,
   "evidence_table": {{
     "current_price": "{_f_price}",
-    "buy_zone": "<same as buy_zone above>",
+    "buy_zone": "<isto kao buy_zone>",
     "pe": "{_f_pe}",
     "forward_pe": "{_f_fwd_pe}",
     "peg": "{_f_peg}",
@@ -329,70 +425,71 @@ Return ONLY this JSON structure (no markdown, no text outside JSON):
     "congress_signal": "Weak — {congress_buys} buy(s), {congress_sells} sell(s)",
     "stocktwits": "{_f_st}",
     "earnings_in": "{_f_earn}",
-    "altman_z_score": "<from fundamentals data or N/A>",
-    "relative_strength_6m": "<from fundamentals data or N/A>",
+    "altman_z_score": "<iz podataka ili N/A>",
+    "relative_strength_6m": "<iz podataka ili N/A>",
     "fundamental_score": "{score_result.get('total_score', 0)}/100",
-    "confidence": "<same as confidence above>/10"
+    "confidence": "<isto kao confidence>/10"
   }}
 }}"""
 
-    # Complete responses measured at 1261-1841 output tokens (2026-08-08, 5 tickers).
-    # 1500 truncated almost every call, which silently became NO_ACTION/confidence 0.
+    system = SYSTEM_PROMPT
+    if investor_profile:
+        system += "\n\n" + investor_profile
+
+    # Haiku's complete responses measured 1261-1841 output tokens before the four
+    # short fields were added; the review model thinks adaptively, which needs room.
     response = client.messages.create(
-        model=MODEL,
-        max_tokens=2500,
-        system=SYSTEM_PROMPT,
+        model=model,
+        max_tokens=3000 if model == MODEL else 16000,
+        system=system,
         messages=[{"role": "user", "content": user_prompt}],
     )
     if response.stop_reason == "max_tokens":
-        print(f"[ai_analyst] WARNING: analyze_stock hit max_tokens for {fundamentals.get('symbol')} — response may be truncated.")
+        print(f"[ai_analyst] WARNING: analyze_stock hit max_tokens for {symbol} ({model}) — response may be truncated.")
 
-    raw_text = response.content[0].text.strip()
-
-    # Strip markdown code fences if Claude added them
-    if raw_text.startswith("```"):
-        raw_text = raw_text.split("```")[1]
-        if raw_text.startswith("json"):
-            raw_text = raw_text[4:]
-    raw_text = raw_text.strip().rstrip("```").strip()
-
-    # Sanitize any Cyrillic characters that sneak in
-    raw_text = _sanitize_cyrillic(raw_text)
-
+    raw_text = _sanitize_cyrillic(_response_text(response))
     try:
-        result = json.loads(raw_text)
-    except json.JSONDecodeError:
+        result = _extract_json(raw_text)
+    except (json.JSONDecodeError, ValueError):
         result = {
-            "ticker": fundamentals.get("symbol", ""),
-            "action": "NO_ACTION",
+            "action": "HOLD" if in_portfolio else "NO_ACTION",
             "confidence": 0,
             "error": f"Failed to parse AI response: {raw_text[:200]}",
         }
 
+    result["ticker"] = symbol or result.get("ticker", "")
     result["is_hidden_gem"] = is_hidden_gem
+    result["in_portfolio"] = in_portfolio
+    result["model"] = model
 
     # Override evidence_table fields we control — real data instead of Claude's guess
     ev = result.setdefault("evidence_table", {})
     ev["stocktwits"] = _f_st
     ev["earnings_in"] = _f_earn
     ev["insider_signal"] = _f_insider
+    ev["debt_equity"] = _f_de
+    ev["seasonality"] = _f_season
     altman_z = fundamentals.get("altman_z_score")
     ev["altman_z_score"] = f"{altman_z:.2f}" if altman_z is not None else "N/A"
     rel_strength = fundamentals.get("relative_strength_6m")
     ev["relative_strength_6m"] = f"{rel_strength:+.1f}pp" if rel_strength is not None else "N/A"
 
+    _normalize_action(result, in_portfolio)
+    no_buy_action = "HOLD" if in_portfolio else "WATCHLIST"
+
     # Hard override: hype block (StockTwits)
-    effective_hype = sentiment_hype
-    if effective_hype >= 7:
-        if result.get("action") in ("BUY_BELOW", "ADD_ON_DIP"):
-            result["action"] = "WATCHLIST"
-            result["hype_override"] = True
-            result["hype_note"] = f"Action downgraded from BUY to WATCHLIST — hype score {effective_hype}/10"
+    if sentiment_hype >= 7 and result.get("action") in BULLISH_ACTIONS:
+        result["action"] = no_buy_action
+        result["hype_override"] = True
+        result["hype_note"] = f"Kupnja spuštena na {no_buy_action} — hype score {sentiment_hype}/10"
 
     # Hard override: low confidence
-    if result.get("confidence", 10) < 6:
-        if result.get("action") in ("BUY_BELOW", "ADD_ON_DIP"):
-            result["action"] = "WAIT"
+    try:
+        confidence = float(result.get("confidence", 10))
+    except (TypeError, ValueError):
+        confidence = 0
+    if confidence < 6 and result.get("action") in BULLISH_ACTIONS:
+        result["action"] = "HOLD" if in_portfolio else "WAIT"
 
     return result
 
@@ -418,6 +515,8 @@ def generate_weekly_summary(
             "target_price": r.get("target_price"),
             "category": r.get("category"),
             "is_hidden_gem": r.get("is_hidden_gem", False),
+            "in_portfolio": r.get("in_portfolio", False),
+            "sell_guard_note": r.get("sell_guard_note"),
         }
         for r in all_recommendations
     ]
@@ -428,12 +527,13 @@ DATUM: {current_date}
 PORTFELJ: {portfolio_context}
 
 INDIVIDUALNE ANALIZE:
-{json.dumps(slim_recs, indent=2, default=str)}
+{json.dumps(slim_recs, ensure_ascii=False, indent=2, default=str)}
 
 Pravila:
-- Odaberi max 4-7 ukupnih akcija (BUY_BELOW, ADD_ON_DIP, WATCHLIST, WAIT, SELL, REDUCE, NO_TRADE)
+- Odaberi max 4-7 ukupnih akcija (BUY_BELOW, ADD_ON_DIP, HOLD, WATCHLIST, WAIT, SELL, REDUCE, NO_TRADE)
 - Ako nijedna dionica ne zadovoljava kriterije kvalitete, summary mora biti NO_TRADE s objašnjenjem
-- Prioritet: postojeće portfolio pozicije prvo, zatim nove ideje
+- Prioritet: postojeće pozicije u portfelju prvo (in_portfolio=true), zatim nove ideje
+- Ako je sell_guard_note postavljen, spomeni ga u portfolio_note
 - overall_market_comment i portfolio_note piši NA HRVATSKOM JEZIKU
 - no_trade_reason piši NA HRVATSKOM ako postoji
 
@@ -452,8 +552,8 @@ Vrati SAMO valjani JSON (bez markdowna, bez teksta izvan JSONa):
   ],
   "watchlist_this_week": ["TICKER1", "TICKER2"],
   "no_trade_reason": "<null ili objašnjenje zašto nema jakih kupnji ovaj tjedan — NA HRVATSKOM>",
-  "portfolio_note": "<napomena o VG poziciji ili koncentraciji portfelja — NA HRVATSKOM>",
-  "email_subject_suffix": "<npr. '1 BUY, 2 WATCHLIST, 0 SELL'>"
+  "portfolio_note": "<napomena o pozicijama u portfelju (HOLD/ADD/REDUCE), koncentraciji i gotovini — NA HRVATSKOM>",
+  "email_subject_suffix": "<npr. '1 BUY, 2 HOLD, 2 WATCHLIST, 0 SELL'>"
 }}"""
 
     response = client.messages.create(
@@ -465,17 +565,8 @@ Vrati SAMO valjani JSON (bez markdowna, bez teksta izvan JSONa):
     if response.stop_reason == "max_tokens":
         print("[ai_analyst] WARNING: generate_weekly_summary hit max_tokens — response may be truncated.")
 
-    raw_text = response.content[0].text.strip()
-    if raw_text.startswith("```"):
-        raw_text = raw_text.split("```")[1]
-        if raw_text.startswith("json"):
-            raw_text = raw_text[4:]
-    raw_text = raw_text.strip().rstrip("```").strip()
-
     try:
-        start = raw_text.index("{")
-        end = raw_text.rindex("}") + 1
-        return json.loads(raw_text[start:end])
+        return _extract_json(_sanitize_cyrillic(_response_text(response)))
     except (json.JSONDecodeError, ValueError):
         return {
             "date": current_date,
