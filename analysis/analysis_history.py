@@ -163,6 +163,11 @@ def record_analyses(client, recommendations: list[dict], fundamentals_by_ticker:
         if not symbol:
             continue
         confidence = _num(rec.get("confidence"))
+        # The debate no longer goes into the newsletter, so it is kept here instead
+        snapshot = make_snapshot(fundamentals_by_ticker.get(symbol, {}))
+        for field in ("investor_view", "counter_argument"):
+            if rec.get(field):
+                snapshot[field] = str(rec[field])[:600]
         rows.append({
             "analyzed_at": now,
             "symbol": symbol,
@@ -172,7 +177,7 @@ def record_analyses(client, recommendations: list[dict], fundamentals_by_ticker:
             "target_price": rec.get("target_price"),
             "thesis": (rec.get("investment_thesis") or "")[:400],
             "model": rec.get("model"),
-            "snapshot": make_snapshot(fundamentals_by_ticker.get(symbol, {})),
+            "snapshot": snapshot,
         })
     try:
         client.table(TABLE).insert(rows).execute()

@@ -37,8 +37,14 @@ def build_checklist(fund: dict, category: str | None = None) -> list[tuple[str, 
 
     inst = fund.get("institutional_ownership")
     if inst is not None:
-        status = PASS if inst < 0.5 else (MIXED if inst < 0.8 else FAIL)
-        items.append((status, f"Institucije drže {inst * 100:.0f}% (pravilo: što manje, ispod 50%)"))
+        if inst > 1.0:
+            # 13F filings lag a quarter and are divided by today's share count: buybacks shrink
+            # the denominator and lent-out shares get counted twice, so >100% is a data artifact
+            items.append((MIXED, f"Institucije drže {inst * 100:.0f}% — nepouzdan podatak "
+                                 "(13F prijave kasne kvartal, otkupi i posuđene dionice napuhuju postotak); ne tretiraj kao crvenu zastavicu"))
+        else:
+            status = PASS if inst < 0.5 else (MIXED if inst < 0.8 else FAIL)
+            items.append((status, f"Institucije drže {inst * 100:.0f}% (pravilo: što manje, ispod 50%)"))
 
     analysts = fund.get("analyst_count")
     if analysts is not None:

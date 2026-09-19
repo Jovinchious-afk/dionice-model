@@ -92,8 +92,11 @@ def _debt_to_equity_x(fundamentals: dict) -> float | None:
 
 
 def _sanitize_cyrillic(text: str) -> str:
-    """Remove Cyrillic characters that occasionally sneak into Claude's Croatian output."""
-    return re.sub(r"[Ѐ-ӿ]", "", text)
+    """
+    Remove non-Latin characters that occasionally sneak into Claude's Croatian output —
+    Cyrillic, and CJK after a Chinese word ("压力 je stvaran") reached a live newsletter.
+    """
+    return re.sub(r"[Ѐ-ӿ぀-ヿ㐀-䶿一-鿿가-힯]", "", text)
 
 
 def _response_text(response) -> str:
@@ -181,11 +184,17 @@ PODACI (automatski izračunati):
 - insider_buys_24m / insider_sells_24m: kupnje/prodaje insidera na tržištu u ~2 godine
 - seasonality: isti kalendarski prozor u prošlim godinama vs S&P 500
 - news_headlines: nedavni naslovi — procijeni sam relevantnost
+- institutional_ownership: iz 13F prijava koje kasne kvartal, podijeljeno s današnjim brojem dionica. Vrijednost iznad 100% je greška u podacima (otkupi smanjili nazivnik, posuđene dionice brojane dvaput) — ne koristi je kao crvenu zastavicu
+
+PROFIL ULAGAČA (pozadinski kontekst, NE ide u newsletter):
+- Profil je leća koja širi pogled, a ne razlog za odluku. Akciju određuju podaci, checklist i valuacija
+- investor_view i counter_argument su interni: uvijek ih napiši i sukobi jedan s drugim, ali ulagač ih ne čita u mailu
+- Kad se ulagačev makro pogled sukobi s brojkama, brojke pobjeđuju. Makro bilješke su pisane 10/2024 i mogu biti zastarjele; pravila o dionicama iz knjiga vrijede trajno
 
 OUTPUT FORMAT: Vraćaj SAMO valjani JSON, bez markdowna, bez teksta izvan JSONa.
 Svi tekstualni opisi MORAJU biti na HRVATSKOM jeziku.
 
-PISMO: Koristi ISKLJUČIVO latinična slova (a-z, A-Z, hrvatska dijakritika: č,ć,š,ž,đ). NIKAD ne koristi ćirilična slova."""
+PISMO: Koristi ISKLJUČIVO latinična slova (a-z, A-Z, hrvatska dijakritika: č,ć,š,ž,đ). NIKAD ćirilica, kineski, japanski ni korejski znakovi."""
 
 
 def _position_guide(portfolio_value_eur: float | None) -> str:
@@ -400,8 +409,8 @@ Vrati SAMO ovu JSON strukturu (bez markdowna, bez teksta izvan JSONa):
   "investment_thesis": "<max 3 rečenice: zašto ova dionica, zašto sada>",
   "valuation_verdict": "<jeftina/fer/skupa vs sektor s 2-3 ključne brojke, 1 rečenica>",
   "cycle_view": "<gdje je dionica u ciklusu/sezoni i što to znači za idućih 3-6 mjeseci, 1 rečenica; 'nije ciklička' ako nije>",
-  "investor_view": "<kako bi ULAGAČ ocijenio dionicu kroz svoj checklist i makro pogled, 1-2 rečenice; 'N/A' ako profil ulagača nije naveden>",
-  "counter_argument": "<najjači protuargument ulagačevom pogledu — podaci, povijest, što tržište već zna, 1-2 rečenice; 'N/A' ako profil nije naveden>",
+  "investor_view": "<INTERNO, ne ide u newsletter: kako bi ULAGAČ ocijenio dionicu kroz svoj checklist i makro pogled, 1-2 rečenice; 'N/A' ako profil ulagača nije naveden>",
+  "counter_argument": "<INTERNO: najjači protuargument ulagačevom pogledu — podaci, povijest, što tržište već zna, 1-2 rečenice; 'N/A' ako profil nije naveden>",
   "change_vs_last": "<što se promijenilo od tvoje zadnje analize (brojke/činjenice) i zašto akcija ostaje ili se mijenja, 1 rečenica; 'prva analiza' ako je nema>",
   "catalyst": "<konkretan događaj ili trend koji može otključati vrijednost u 6-18 mjeseci, 1 rečenica>",
   "downside_scenario": "<što mora poći po zlu za gubitak 30-50%, konkretno, 1-2 rečenice>",
@@ -436,11 +445,12 @@ Vrati SAMO ovu JSON strukturu (bez markdowna, bez teksta izvan JSONa):
     if investor_profile:
         system += "\n\n" + investor_profile
 
-    # Haiku's complete responses measured 1261-1841 output tokens before the four
-    # short fields were added; the review model thinks adaptively, which needs room.
+    # Haiku's complete responses measured 1261-1841 output tokens before the four short
+    # fields were added, but 3000 still truncated the odd long answer into unparseable JSON;
+    # unused headroom is free. The review model thinks adaptively, which needs more room.
     response = client.messages.create(
         model=model,
-        max_tokens=3000 if model == MODEL else 16000,
+        max_tokens=4000 if model == MODEL else 16000,
         system=system,
         messages=[{"role": "user", "content": user_prompt}],
     )
@@ -458,6 +468,9 @@ Vrati SAMO ovu JSON strukturu (bez markdowna, bez teksta izvan JSONa):
         }
 
     result["ticker"] = symbol or result.get("ticker", "")
+    # Claude has renamed companies in the newsletter (BEN as "Franklin Templeton" instead of
+    # "Franklin Resources"), so the name comes from the data whenever the data has one
+    result["company_name"] = fundamentals.get("name") or result.get("company_name", "")
     result["is_hidden_gem"] = is_hidden_gem
     result["in_portfolio"] = in_portfolio
     result["model"] = model

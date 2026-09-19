@@ -128,6 +128,28 @@ def text_value(value) -> str:
     return str(value) if has_value(value) else ""
 
 
+def search_box(key: str, placeholder: str) -> str:
+    """
+    Ctrl+F in the browser cannot see text inside collapsed expanders, which is most of
+    this app, so every long list gets its own search field.
+    """
+    return st.text_input("🔍 Traži", key=key, placeholder=placeholder).strip().lower()
+
+
+def row_matches(row, query: str, columns: list[str]) -> bool:
+    if not query:
+        return True
+    return any(query in text_value(row.get(col)).lower() for col in columns)
+
+
+def filter_rows(df: pd.DataFrame, query: str, columns: list[str]) -> pd.DataFrame:
+    if not query or df.empty:
+        return df
+    present = [c for c in columns if c in df.columns]
+    mask = df.apply(lambda row: row_matches(row, query, present), axis=1)
+    return df[mask]
+
+
 def load_cash(db) -> dict:
     cash = {"cash_usd": 0.0, "cash_eur": 0.0}
     try:
@@ -447,6 +469,12 @@ elif page == "Watchlist":
     if wl_df.empty:
         st.info("No active watchlist items. Items appear automatically after each newsletter.")
     else:
+        total_wl = len(wl_df)
+        query = search_box("wl_search", "ticker, ime tvrtke, teza, kategorija...")
+        wl_df = filter_rows(wl_df, query, ["symbol", "company_name", "thesis", "action", "category"])
+        if query:
+            st.caption(f"{len(wl_df)} od {total_wl} stavki")
+
         # Filter bar
         filter_action = st.radio(
             "Filter po akciji",
@@ -590,7 +618,17 @@ elif page == "Decisions":
             st.info(f"🔔 {near_30d_count} preporuka je blizu 30-dnevne provjere — outcome se automatski ažurira srijedom.")
 
         st.subheader("All Decisions")
-        for _, row in decisions_df.iterrows():
+        query = search_box("dec_search", "ticker, akcija, teza, datum (npr. 2026-09)...")
+        visible_df = filter_rows(
+            decisions_df, query,
+            ["symbol", "agent_action", "agent_thesis", "recommended_at", "user_action", "outcome_30d"],
+        )
+        if query:
+            st.caption(f"{len(visible_df)} od {total} preporuka")
+            if visible_df.empty:
+                st.info("Nema preporuka za taj upit.")
+
+        for _, row in visible_df.iterrows():
             # Compute age and near-30d flag
             days_old = 0
             near_30d = False
@@ -682,17 +720,38 @@ elif page == "Newsletteri":
     if nl_df.empty:
         st.info("Nema newslettera u arhivi.")
     else:
+        query = search_box("nl_search", "ticker, datum, riječ iz komentara...")
+
+        parsed = []
         for _, row in nl_df.iterrows():
-            sent_at = str(row.get("sent_at", ""))[:10]
-            subject = row.get("subject", "—")
-            nl_type = row.get("type", "WEEKLY")
             content = row.get("content_json") or {}
             if isinstance(content, str):
                 try:
                     content = json.loads(content)
                 except Exception:
                     content = {}
+            parsed.append((str(row.get("sent_at", ""))[:10], row.get("subject", "—"), content))
 
+        if query:
+            def newsletter_matches(sent_at: str, subject: str, content: dict) -> bool:
+                actions = content.get("top_actions") or []
+                haystack = " ".join([
+                    sent_at,
+                    str(subject),
+                    str(content.get("overall_market_comment", "")),
+                    str(content.get("portfolio_note", "")),
+                    str(content.get("no_trade_reason") or ""),
+                    " ".join(str(a.get("ticker", "")) + " " + str(a.get("one_liner", "")) for a in actions),
+                    " ".join(str(t) for t in (content.get("watchlist_this_week") or [])),
+                ])
+                return query in haystack.lower()
+
+            parsed = [item for item in parsed if newsletter_matches(*item)]
+            st.caption(f"{len(parsed)} od {len(nl_df)} newslettera")
+            if not parsed:
+                st.info("Nema newslettera za taj upit.")
+
+        for sent_at, subject, content in parsed:
             with st.expander(f"📧 {sent_at} — {subject}"):
                 col1, col2 = st.columns(2)
 

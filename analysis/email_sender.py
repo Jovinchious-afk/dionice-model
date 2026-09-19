@@ -79,7 +79,7 @@ def _build_evidence_table(ev: dict) -> str:
         ("Revenue growth", ev.get("revenue_growth", "N/A")),
         ("FCF yield", ev.get("fcf_yield", "N/A")),
         ("Op. margin", ev.get("op_margin", "N/A")),
-        ("Insider signal", ev.get("insider_signal", "N/A")),
+        ("Insider (14 dana)", ev.get("insider_signal", "N/A")),
         ("Congress signal", ev.get("congress_signal", "N/A")),
         ("StockTwits", ev.get("stocktwits", "N/A")),
         ("Earnings za", ev.get("earnings_in", "N/A")),
@@ -150,17 +150,8 @@ def _build_stock_block(rec: dict) -> str:
             f"border-radius:0 4px 4px 0;font-size:13px;margin:8px 0;'>🛡️ {guard_note}</p>"
         )
 
-    investor_view = rec.get("investor_view", "")
-    counter_argument = rec.get("counter_argument", "")
-    debate_html = ""
-    if _has_text(investor_view) or _has_text(counter_argument):
-        debate_html = (
-            "<div style='background:#f4f8fc;border-left:4px solid #1f5f8b;padding:10px 14px;margin:8px 0;"
-            "border-radius:0 4px 4px 0;font-size:13px;'>"
-            f"<p style='margin:2px 0;'><strong>🧭 Tvoj pogled:</strong> {investor_view}</p>"
-            f"<p style='margin:6px 0 2px;'><strong>⚖️ Protuargument:</strong> {counter_argument}</p>"
-            "</div>"
-        )
+    # investor_view / counter_argument are deliberately not rendered: the model still writes them
+    # (and they are stored in analysis_log), but they made the newsletter long enough for Gmail to clip it
 
     context_html = ""
     for field_label, field_key in (("Ciklus/sezona", "cycle_view"), ("Promjena od zadnje analize", "change_vs_last")):
@@ -195,7 +186,6 @@ def _build_stock_block(rec: dict) -> str:
   {hype_note_html}
   {guard_html}
   <p style='margin:10px 0 4px;font-size:14px;'><strong>Teza:</strong> {thesis}</p>
-  {debate_html}
   <p style='margin:6px 0;font-size:13px;'><strong>Valuacija:</strong> {valuation}</p>
   {context_html}
   <p style='margin:6px 0;font-size:13px;'><strong>Katalizator:</strong> {catalyst}</p>

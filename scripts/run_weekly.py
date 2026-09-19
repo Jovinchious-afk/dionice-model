@@ -52,6 +52,7 @@ DECISION_REPEAT_DAYS = 30
 DECISION_ACTIONS = {"BUY_BELOW", "ADD_ON_DIP", "WATCHLIST", "HOLD", "SELL", "REDUCE"}
 # The watchlist tracks buy zones; HOLD/SELL/REDUCE concern positions already owned
 WATCHLIST_ACTIONS = {"BUY_BELOW", "ADD_ON_DIP", "WATCHLIST"}
+MIN_EMAIL_CONFIDENCE = 5
 
 
 def _num(value) -> float | None:
@@ -189,6 +190,18 @@ def apply_sell_guard(rec: dict, analysis_kwargs: dict, fund: dict) -> dict:
         f"Konačnu odluku donio {REVIEW_MODEL}: {review.get('action')}."
     )
     return review
+
+
+def newsletter_worthy(rec: dict) -> bool:
+    """
+    Only calls the investor can act on reach the email: confidence 5+ keeps the newsletter
+    short enough that Gmail stops clipping it. Two exceptions — hidden gems are speculative by
+    definition, and a position he already owns has to be shown whatever the confidence is.
+    """
+    if rec.get("is_hidden_gem") or rec.get("in_portfolio"):
+        return True
+    confidence = _num(rec.get("confidence"))
+    return confidence is not None and confidence >= MIN_EMAIL_CONFIDENCE
 
 
 def _load_active_ai_watchlist(client) -> dict[str, list[dict]]:
@@ -571,6 +584,9 @@ def main(dry_run: bool = False, limit: int | None = None):
             rec.setdefault("evidence_table", {})["checklist"] = rec["checklist_summary"]
             recommendations.append(rec)
 
+            if rec.get("error"):
+                print(f"[run_weekly] {ticker}: {rec['error']}")
+
             gem_label = " 💎" if is_gem else ""
             held_label = " 📌" if in_portfolio else ""
             print(f"[run_weekly] {ticker}{gem_label}{held_label}: {rec.get('action')} (confidence {rec.get('confidence')}, {rec.get('model')})")
@@ -587,9 +603,19 @@ def main(dry_run: bool = False, limit: int | None = None):
         record_run(write_client, raw_fundamentals, actioned_symbols=actioned, health=health)
         record_analyses(write_client, recommendations, fundamentals_map)
 
+    # 8c. Everything below this line works on the published subset. Weak calls stay in
+    # analysis_log (so the next run still remembers them) but never reach the email,
+    # the watchlist or the decision log.
+    published, dropped = [], []
+    for rec in recommendations:
+        (published if newsletter_worthy(rec) else dropped).append(rec)
+    if dropped:
+        dropped_txt = ", ".join(f"{r.get('ticker')} ({r.get('confidence')})" for r in dropped)
+        print(f"[run_weekly] Below confidence {MIN_EMAIL_CONFIDENCE}, not in newsletter: {dropped_txt}")
+
     # 9. Newsletter summary
     print("[run_weekly] Generating newsletter summary...")
-    summary = generate_weekly_summary(recommendations, portfolio_context, date_str)
+    summary = generate_weekly_summary(published, portfolio_context, date_str)
 
     # 10. Build and send email
     suffix = summary.get("email_subject_suffix", "")
@@ -601,7 +627,7 @@ def main(dry_run: bool = False, limit: int | None = None):
 
     html = build_html_email(
         summary=summary,
-        recommendations=recommendations,
+        recommendations=published,
         portfolio_value=None,
         portfolio_positions=positions,
         email_type="WEEKLY",
@@ -623,11 +649,12 @@ def main(dry_run: bool = False, limit: int | None = None):
     # 11. Save to Supabase
     if write_client:
         print("[run_weekly] Saving to Supabase...")
-        save_recommendations_to_supabase(write_client, recommendations)
+        save_recommendations_to_supabase(write_client, published)
         save_newsletter_to_supabase(write_client, subject, summary, "WEEKLY")
 
     gems_analyzed = sum(1 for r in recommendations if r.get("is_hidden_gem"))
-    print(f"[run_weekly] Done. {len(recommendations)} stocks analyzed ({gems_analyzed} hidden gems).")
+    print(f"[run_weekly] Done. {len(recommendations)} stocks analyzed ({gems_analyzed} hidden gems), "
+          f"{len(published)} in the newsletter, {len(dropped)} below confidence {MIN_EMAIL_CONFIDENCE}.")
 
 
 if __name__ == "__main__":
