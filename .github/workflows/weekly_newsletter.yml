@@ -12,7 +12,9 @@ on:
 jobs:
   send-newsletter:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # The analyses go out as one Message Batch (half price); it usually finishes
+    # within the hour, and after 75 minutes the run falls back to direct calls.
+    timeout-minutes: 120
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 

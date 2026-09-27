@@ -28,6 +28,7 @@ class SupabaseTable:
         self._order_col = None
         self._order_desc = False
         self._limit_val = None
+        self._offset_val = None
         return self
 
     def eq(self, column: str, value):
@@ -49,6 +50,11 @@ class SupabaseTable:
 
     def limit(self, n: int):
         self._limit_val = n
+        return self
+
+    def offset(self, n: int):
+        """Skip the first n rows — with limit() this pages past Supabase's 1000-row response cap."""
+        self._offset_val = n
         return self
 
     def insert(self, row: dict):
@@ -94,7 +100,9 @@ class SupabaseTable:
             params += f"&order={self._order_col}.{direction}"
         if getattr(self, "_limit_val", None):
             params += f"&limit={self._limit_val}"
-        resp = requests.get(f"{self._url}?{params}", headers=self._headers, timeout=15)
+        if getattr(self, "_offset_val", None):
+            params += f"&offset={self._offset_val}"
+        resp = requests.get(f"{self._url}?{params}", headers=self._headers, timeout=30)
         resp.raise_for_status()
         return type("Result", (), {"data": resp.json()})()
 
@@ -106,6 +114,25 @@ class SupabaseClient:
 
     def table(self, name: str) -> SupabaseTable:
         return SupabaseTable(self._url, self._key, name)
+
+    def fetch_all(self, table: str, columns: str = "*", gte: tuple[str, str] | None = None,
+                  page: int = 1000) -> list[dict]:
+        """
+        Every row of a table (optionally filtered by column >= value), page by page.
+        Pages are ordered by the unique id: without a stable order Postgres may
+        return overlapping or missing rows between pages.
+        """
+        if columns != "*" and "id" not in [c.strip() for c in columns.split(",")]:
+            columns += ",id"
+        rows: list[dict] = []
+        while True:
+            query = self.table(table).select(columns).order("id")
+            if gte:
+                query = query.gte(*gte)
+            batch = query.limit(page).offset(len(rows)).execute().data or []
+            rows.extend(batch)
+            if len(batch) < page:
+                return rows
 
 
 def get_supabase() -> SupabaseClient | None:

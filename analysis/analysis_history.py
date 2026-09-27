@@ -1,10 +1,16 @@
 """
-Per-ticker memory across newsletter runs.
+Per-ticker memory across newsletter runs, and the raw data of the learning loop.
 
 Each run used to analyse every stock from scratch, so identical numbers could
 produce ADD_ON_DIP four times and then REDUCE (GNRC, Aug-Sep 2026). Every
 analysis is now logged with a snapshot of its key numbers, and the next run shows
 the model its own recent calls plus exactly which numbers moved since the last.
+
+The snapshot also carries a "features" record — score and its ten criteria,
+category, hype, checklist counts, 52-week position, guards applied — and stocks
+the run scored but did not send to Claude are logged too (action SKIPPED_SCORE /
+EXCLUDED, no AI cost). The quarterly learning report measures which of these
+inputs actually predicted returns.
 
 Until schema_v7.sql creates analysis_log, the decisions table stands in — calls
 and prices only, no fundamentals snapshot.
@@ -15,6 +21,8 @@ from datetime import datetime, timedelta, timezone
 TABLE = "analysis_log"
 HISTORY_DAYS = 60
 MAX_CALLS_SHOWN = 4
+# Rows logged for the learning loop without any AI analysis behind them
+SHADOW_ACTIONS = {"SKIPPED_SCORE", "EXCLUDED"}
 
 # (key, label, kind). kind drives formatting and the "did it really move" threshold.
 SNAPSHOT_FIELDS = [
@@ -36,6 +44,11 @@ _THRESHOLDS = {
     "x": ("abs", 0.03),
     "pct": ("abs", 0.2),
 }
+FEATURE_FIELDS = [
+    "sector", "industry", "market_cap", "current_price", "pe", "forward_pe", "peg", "fcf_yield", "roe",
+    "op_margin", "revenue_growth_yoy", "debt_to_equity_x", "dividend_yield", "insider_buys_24m",
+    "week_52_position_pct", "next_earnings_days", "relative_strength_6m", "altman_z_score",
+]
 
 
 def _num(value) -> float | None:
@@ -49,6 +62,42 @@ def _num(value) -> float | None:
 def make_snapshot(fund: dict) -> dict:
     snap = {key: _num(fund.get(key)) for key, _, _ in SNAPSHOT_FIELDS}
     return {k: v for k, v in snap.items() if v is not None}
+
+
+def build_features(
+    fund: dict,
+    score_result: dict,
+    category: str,
+    sentiment: dict | None = None,
+    checklist_items: list[tuple[str, str]] | None = None,
+    **extra,
+) -> dict:
+    """Everything the run knew about a stock at decision time, for the learning report."""
+    features: dict = {}
+    for key in FEATURE_FIELDS:
+        value = fund.get(key)
+        if isinstance(value, str):
+            features[key] = value
+        else:
+            num = _num(value)
+            if num is not None:
+                features[key] = round(num, 4)
+    features.update({
+        "scorer_version": score_result.get("scorer_version"),
+        "score": score_result.get("total_score"),
+        "coverage": score_result.get("coverage"),
+        "category": category,
+        "criteria": {name: b.get("raw") for name, b in (score_result.get("breakdown") or {}).items()},
+    })
+    if sentiment:
+        features["hype"] = sentiment.get("hype_score")
+        features["msgs_per_day"] = sentiment.get("msgs_per_day")
+        features["bullish_pct"] = sentiment.get("bullish_pct")
+    if checklist_items:
+        for label, status in (("checklist_pass", "✓"), ("checklist_fail", "✗"), ("checklist_mixed", "~")):
+            features[label] = sum(1 for s, _ in checklist_items if s == status)
+    features.update({k: v for k, v in extra.items() if v is not None})
+    return features
 
 
 def _fmt(value: float, kind: str) -> str:
@@ -76,7 +125,7 @@ def _cutoff_iso(days: int) -> str:
 
 
 def load_recent_history(client, days: int = HISTORY_DAYS) -> dict[str, list[dict]]:
-    """Recent calls per symbol, newest first. analysis_log wins; decisions fill the gaps."""
+    """Recent AI calls per symbol, newest first. analysis_log wins; decisions fill the gaps."""
     if not client:
         return {}
     cutoff = _cutoff_iso(days)
@@ -86,6 +135,8 @@ def load_recent_history(client, days: int = HISTORY_DAYS) -> dict[str, list[dict
         rows = (client.table(TABLE).select("*").gte("analyzed_at", cutoff)
                 .order("analyzed_at", desc=True).execute().data or [])
         for row in rows:
+            if row.get("action") in SHADOW_ACTIONS or not row.get("model"):
+                continue
             by_symbol.setdefault(row["symbol"], []).append(row)
     except Exception as exc:
         print(f"[analysis_history] {TABLE} unavailable (run data/schema_v7.sql?): {exc}")
@@ -131,12 +182,13 @@ def build_previous_calls_block(history: list[dict] | None, fund: dict) -> str | 
     old, now = last.get("snapshot") or {}, make_snapshot(fund)
     moved, fundamentals_compared = [], 0
     for key, label, kind in SNAPSHOT_FIELDS:
-        if key not in old or key not in now:
+        old_value, new_value = _num(old.get(key)), _num(now.get(key))
+        if old_value is None or new_value is None:
             continue
         if key != "current_price":
             fundamentals_compared += 1
-        if _moved(old[key], now[key], kind):
-            moved.append((key, f"{label} {_fmt(old[key], kind)} → {_fmt(now[key], kind)}"))
+        if _moved(old_value, new_value, kind):
+            moved.append((key, f"{label} {_fmt(old_value, kind)} → {_fmt(new_value, kind)}"))
 
     date = str(last.get("analyzed_at") or "")[:10]
     if moved:
@@ -152,10 +204,20 @@ def build_previous_calls_block(history: list[dict] | None, fund: dict) -> str | 
     return "\n".join(lines)
 
 
-def record_analyses(client, recommendations: list[dict], fundamentals_by_ticker: dict[str, dict]) -> None:
-    """One row per analysed ticker — every action, including WAIT and NO_ACTION."""
-    if not client or not recommendations:
+def record_analyses(
+    client,
+    recommendations: list[dict],
+    fundamentals_by_ticker: dict[str, dict],
+    features_by_ticker: dict[str, dict] | None = None,
+    shadow_rows: list[dict] | None = None,
+) -> None:
+    """
+    One row per analysed ticker — every action, including WAIT and NO_ACTION —
+    plus one shadow row per stock that was scored but not sent to Claude.
+    """
+    if not client or not (recommendations or shadow_rows):
         return
+    features_by_ticker = features_by_ticker or {}
     now = datetime.now(timezone.utc).isoformat()
     rows = []
     for rec in recommendations:
@@ -168,6 +230,8 @@ def record_analyses(client, recommendations: list[dict], fundamentals_by_ticker:
         for field in ("investor_view", "counter_argument"):
             if rec.get(field):
                 snapshot[field] = str(rec[field])[:600]
+        if symbol in features_by_ticker:
+            snapshot["features"] = features_by_ticker[symbol]
         rows.append({
             "analyzed_at": now,
             "symbol": symbol,
@@ -175,12 +239,24 @@ def record_analyses(client, recommendations: list[dict], fundamentals_by_ticker:
             "confidence": int(confidence) if confidence is not None else None,
             "buy_zone": rec.get("buy_zone"),
             "target_price": rec.get("target_price"),
-            "thesis": (rec.get("investment_thesis") or "")[:400],
+            "thesis": (rec.get("investment_thesis") or rec.get("error") or "")[:400],
             "model": rec.get("model"),
             "snapshot": snapshot,
         })
+    for shadow in shadow_rows or []:
+        rows.append({
+            "analyzed_at": now,
+            "symbol": shadow["symbol"],
+            "action": shadow["action"],
+            "confidence": None,
+            "buy_zone": None,
+            "target_price": None,
+            "thesis": shadow.get("reason", "")[:400],
+            "model": None,
+            "snapshot": {**make_snapshot(shadow.get("fundamentals") or {}), "features": shadow.get("features") or {}},
+        })
     try:
         client.table(TABLE).insert(rows).execute()
-        print(f"[analysis_history] Logged {len(rows)} analyses")
+        print(f"[analysis_history] Logged {len(rows)} rows ({len(shadow_rows or [])} without AI analysis)")
     except Exception as exc:
         print(f"[analysis_history] Could not write {TABLE} (run data/schema_v7.sql?): {exc}")

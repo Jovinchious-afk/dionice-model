@@ -1,0 +1,4 @@
+# Local development only — Streamlit Cloud and GitHub Actions install requirements.txt
+-r requirements.txt
+pytest>=8
+playwright>=1.45  # then once: python -m playwright install chromium

@@ -2,11 +2,25 @@
 Scores a stock's fundamentals on a 0-100 scale using category-specific weights.
 Five categories: quality_compounder, value_cyclical, turnaround,
                  speculative_growth, dividend_defensive
+
+Version 2 (2026-09):
+  - P/E is compared with the median of the stock's industry (or sector) from
+    data/sector_benchmarks.json instead of a fixed 20 — the investor's own brief
+    asks for valuation "vs the industry"
+  - insider_buys scores actual open-market purchases in ~2 years, not the % of
+    shares insiders own
+  - margin_trend adjusts the margin level for the trend (3 falling quarters = -1)
+  - a metric Yahoo does not report is left out of the average instead of scoring
+    0, which used to rank a missing PEG below a terrible one
 """
 
-from typing import Any
+import json
+from functools import lru_cache
+from pathlib import Path
 
 from analysis.sector_context import is_cyclical
+
+SCORER_VERSION = 2
 
 CATEGORIES = [
     "quality_compounder",
@@ -17,7 +31,6 @@ CATEGORIES = [
 ]
 
 # Weights per criterion per category. Values are multipliers (higher = more important).
-# Each row sums to the same relative importance across the 10 criteria.
 WEIGHTS = {
     #                           QC    VC    TA    SG    DD
     "pe_vs_sector":            [0.6,  1.0,  0.3,  0.2,  0.6],
@@ -34,6 +47,12 @@ WEIGHTS = {
 
 CATEGORY_INDEX = {cat: i for i, cat in enumerate(CATEGORIES)}
 
+DEFAULT_PE = 20.0
+BENCHMARKS_PATH = Path(__file__).parent.parent / "data" / "sector_benchmarks.json"
+MIN_INDUSTRY_PEERS = 8
+# Below this share of the category's total weight the score says little
+MIN_COVERAGE = 0.5
+
 # Balance-sheet distress tests (Altman Z, current ratio) were derived from
 # manufacturing firms and misfire badly outside it: regulated utilities and REITs
 # run high leverage against stable or asset-backed cash flows, and banks and
@@ -48,29 +67,55 @@ BALANCE_SHEET_EXEMPT_SECTORS = {
 }
 
 
-def _score_metric(value: float | None, thresholds: list[tuple[float, int]]) -> int:
+@lru_cache(maxsize=1)
+def _benchmarks() -> dict:
+    try:
+        return json.loads(BENCHMARKS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def peer_pe(fundamentals: dict, forward: bool = False) -> tuple[float, str]:
+    """Median (forward) P/E of the stock's industry, else its sector, else 20."""
+    key = "forward_pe_median" if forward else "pe_median"
+    data = _benchmarks()
+    industry = (data.get("industries") or {}).get(fundamentals.get("industry") or "")
+    if industry and (industry.get("n") or 0) >= MIN_INDUSTRY_PEERS and industry.get(key):
+        return float(industry[key]), f"industrija {fundamentals.get('industry')}"
+    sector = (data.get("sectors") or {}).get(fundamentals.get("sector") or "")
+    if sector and sector.get(key):
+        return float(sector[key]), f"sektor {fundamentals.get('sector')}"
+    return DEFAULT_PE, "zadano 20"
+
+
+def _num(value) -> float | None:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if v != v else v
+
+
+def _score_metric(value: float | None, thresholds: list[tuple[float, int]]) -> int | None:
     """
-    Maps a raw metric value to a score 0-5 using a list of (threshold, score) pairs
-    sorted from best to worst. Returns 0 if value is None.
+    Maps a raw metric value to a score 1-5 using (threshold, score) pairs sorted
+    from best to worst. None when the metric is missing.
     """
     if value is None:
-        return 0
+        return None
     for threshold, score in thresholds:
         if value >= threshold:
             return score
     return 1
 
 
-def _score_pe(pe: float | None, sector_pe: float | None = 20.0) -> int:
-    try:
-        pe = float(pe)
-    except (TypeError, ValueError):
-        return 0
-    if pe != pe:  # NaN check
-        return 0
+def _score_pe(pe, peer: float = DEFAULT_PE) -> int | None:
+    pe = _num(pe)
+    if pe is None:
+        return None
     if pe <= 0:  # negative earnings
         return 1
-    ratio = pe / sector_pe if sector_pe else pe / 20.0
+    ratio = pe / peer if peer else pe / DEFAULT_PE
     if ratio < 0.7:
         return 5
     if ratio < 0.9:
@@ -82,20 +127,10 @@ def _score_pe(pe: float | None, sector_pe: float | None = 20.0) -> int:
     return 1
 
 
-def _score_peg(peg: float | None) -> int:
-    return _score_metric(peg, [(0.01, 5), (0.01, 5)] if False else []) or _score_metric(
-        peg,
-        [(0.01, 5)],  # unreachable shortcut — use explicit logic below
-    )
-
-
-def _score_peg_value(peg: float | None) -> int:
-    try:
-        peg = float(peg)
-    except (TypeError, ValueError):
-        return 0
-    if peg != peg:
-        return 0
+def _score_peg_value(peg) -> int | None:
+    peg = _num(peg)
+    if peg is None:
+        return None
     if peg <= 0:
         return 1
     if peg < 0.8:
@@ -109,15 +144,14 @@ def _score_peg_value(peg: float | None) -> int:
     return 1
 
 
-def _score_fcf_yield(fcf_yield: float | None) -> int:
-    if fcf_yield is None:
-        return 0
-    return _score_metric(fcf_yield, [(8, 5), (5, 4), (3, 3), (1, 2), (0.01, 1)])
+def _score_fcf_yield(fcf_yield) -> int | None:
+    return _score_metric(_num(fcf_yield), [(8, 5), (5, 4), (3, 3), (1, 2), (0.01, 1)])
 
 
-def _score_revenue_growth(growth: float | None) -> int:
+def _score_revenue_growth(growth) -> int | None:
+    growth = _num(growth)
     if growth is None:
-        return 0
+        return None
     pct = growth * 100
     if pct > 25:
         return 4  # cap high growth — could be unsustainable
@@ -132,11 +166,13 @@ def _score_revenue_growth(growth: float | None) -> int:
     return 1  # declining revenue
 
 
-def _score_debt_equity(de: float | None) -> int:
-    if de is None:
-        return 0
-    if de < 0:  # more cash than debt
-        return 5
+def _score_debt_equity(de) -> int | None:
+    """de is yfinance's percent figure (49.0 = 0.49x)."""
+    de = _num(de)
+    # Negative D/E means negative equity (buybacks beyond book value, e.g. MCD):
+    # the ratio says nothing then, so it is left out rather than scored as 5
+    if de is None or de < 0:
+        return None
     if de < 30:
         return 5
     if de < 80:
@@ -148,16 +184,18 @@ def _score_debt_equity(de: float | None) -> int:
     return 1
 
 
-def _score_roe(roe: float | None) -> int:
+def _score_roe(roe) -> int | None:
+    roe = _num(roe)
     if roe is None:
-        return 0
-    pct = roe * 100
-    return _score_metric(pct, [(20, 5), (15, 4), (10, 3), (5, 2), (0.01, 1)])
+        return None
+    return _score_metric(roe * 100, [(20, 5), (15, 4), (10, 3), (5, 2), (0.01, 1)])
 
 
-def _score_dividend(div_yield: float | None, payout_ratio: float | None) -> int:
-    if div_yield is None or div_yield == 0:
-        return 1  # no dividend
+def _score_dividend(div_yield, payout_ratio) -> int:
+    """No dividend is a fact (1), not missing data."""
+    div_yield = _num(div_yield)
+    if not div_yield:
+        return 1
     pct = div_yield * 100
     if pct > 8:
         return 2  # suspiciously high — potential cut risk
@@ -168,38 +206,52 @@ def _score_dividend(div_yield: float | None, payout_ratio: float | None) -> int:
     else:
         score = 3
     # Penalise if payout ratio > 90% (unsustainable)
-    if payout_ratio and payout_ratio > 0.9:
+    payout = _num(payout_ratio)
+    if payout and payout > 0.9:
         score = max(1, score - 2)
     return score
 
 
-def _score_insider_buys(insider_ownership: float | None) -> int:
-    if insider_ownership is None:
-        return 2  # neutral
-    pct = insider_ownership * 100
-    if pct > 15:
-        return 5
-    if pct > 5:
-        return 4
-    if pct > 1:
-        return 3
+def _score_insider_buys(buys_24m, unclassified_24m, insider_ownership) -> int:
+    """
+    The investor's rule: insider selling is not a signal, but no executive purchase
+    in two years is a warning. Neutral (2) when Yahoo has no list at all.
+    """
+    buys = _num(buys_24m)
+    if buys is not None:
+        if buys >= 2:
+            return 5
+        if buys >= 1:
+            return 4
+        return 3 if (_num(unclassified_24m) or 0) > 0 else 2
+    ownership = _num(insider_ownership)
+    if ownership is not None and ownership > 0.15:
+        return 3  # owners with a big stake, but no purchase data
     return 2
 
 
-def _score_margin_trend(op_margin: float | None, net_margin: float | None) -> int:
-    if op_margin is None and net_margin is None:
-        return 0
-    margin = op_margin or net_margin or 0
-    pct = margin * 100
-    return _score_metric(pct, [(20, 5), (12, 4), (6, 3), (1, 2), (0.01, 1)])
+def _score_margin_trend(op_margin, net_margin, declining_3q=None, quarters=None) -> int | None:
+    """Margin level, one point lower after three falling quarters, one higher when clearly rising."""
+    margin = _num(op_margin)
+    if margin is None:
+        margin = _num(net_margin)
+    if margin is None:
+        return None
+    score = _score_metric(margin * 100, [(20, 5), (12, 4), (6, 3), (1, 2), (0.01, 1)])
+    if declining_3q:
+        score = max(1, score - 1)
+    elif quarters and len(quarters) >= 4 and quarters[0] - quarters[3] >= 2.0:
+        score = min(5, score + 1)
+    return score
 
 
-def _score_inventory(inventory_growth: float | None, sales_growth: float | None) -> int:
+def _score_inventory(inventory_growth, sales_growth) -> int:
     """
     Inventory vs sales, same quarter a year apart. The investor's rule: inventories
     growing twice as fast as sales = sell. No inventory line (software, banks) or
     no data is neutral rather than a penalty.
     """
+    inventory_growth, sales_growth = _num(inventory_growth), _num(sales_growth)
     if inventory_growth is None or sales_growth is None:
         return 3
     if inventory_growth > 0.10 and inventory_growth > 2 * max(sales_growth, 0.0):
@@ -213,71 +265,97 @@ def _score_inventory(inventory_growth: float | None, sales_growth: float | None)
     return 2
 
 
-def score_stock(fundamentals: dict, category: str, sector_pe: float = 20.0) -> dict:
+def resolve_weights(override: dict | None) -> dict:
+    """WEIGHTS with an approved override (from model_params) applied; malformed rows ignored."""
+    if not override:
+        return WEIGHTS
+    merged = {k: list(v) for k, v in WEIGHTS.items()}
+    for criterion, row in override.items():
+        if criterion in merged and isinstance(row, list) and len(row) == len(CATEGORIES):
+            try:
+                merged[criterion] = [max(0.0, float(w)) for w in row]
+            except (TypeError, ValueError):
+                continue
+    return merged
+
+
+def score_stock(fundamentals: dict, category: str, weights: dict | None = None) -> dict:
     """
     Scores a stock given its fundamentals dict and category.
-    Returns a dict with total score (0-100) and per-criterion breakdown.
+    Returns total score (0-100), per-criterion breakdown and data coverage.
     """
     if category not in CATEGORY_INDEX:
         category = "quality_compounder"
     idx = CATEGORY_INDEX[category]
+    weights = weights or WEIGHTS
 
     # A cyclical's trailing P/E is inflated by depressed earnings at the bottom of
     # the cycle (GNRC: 42.9 trailing vs 15.8 forward), so judge it on forward P/E.
-    pe = fundamentals.get("pe")
-    if category == "value_cyclical" and fundamentals.get("forward_pe"):
-        pe = fundamentals.get("forward_pe")
+    use_forward = category == "value_cyclical" and _num(fundamentals.get("forward_pe")) is not None
+    pe = fundamentals.get("forward_pe") if use_forward else fundamentals.get("pe")
+    peer, peer_source = peer_pe(fundamentals, forward=use_forward)
     quarterly_sales = fundamentals.get("quarterly_revenue_growth_yoy")
     sales_growth = quarterly_sales if quarterly_sales is not None else fundamentals.get("revenue_growth_yoy")
 
     raw_scores = {
-        "pe_vs_sector":    _score_pe(pe, sector_pe),
+        "pe_vs_sector":    _score_pe(pe, peer),
         "peg":             _score_peg_value(fundamentals.get("peg")),
         "fcf_yield":       _score_fcf_yield(fundamentals.get("fcf_yield")),
         "revenue_growth":  _score_revenue_growth(fundamentals.get("revenue_growth_yoy")),
         "debt_equity":     _score_debt_equity(fundamentals.get("debt_equity")),
         "roe_roic":        _score_roe(fundamentals.get("roe")),
-        "dividend":        _score_dividend(
-                               fundamentals.get("dividend_yield"),
-                               fundamentals.get("payout_ratio")
+        "dividend":        _score_dividend(fundamentals.get("dividend_yield"), fundamentals.get("payout_ratio")),
+        "insider_buys":    _score_insider_buys(
+                               fundamentals.get("insider_buys_24m"),
+                               fundamentals.get("insider_unclassified_24m"),
+                               fundamentals.get("insider_ownership"),
                            ),
-        "insider_buys":    _score_insider_buys(fundamentals.get("insider_ownership")),
         "margin_trend":    _score_margin_trend(
                                fundamentals.get("op_margin"),
-                               fundamentals.get("net_margin")
+                               fundamentals.get("net_margin"),
+                               fundamentals.get("op_margin_declining_3q"),
+                               fundamentals.get("op_margin_quarters_pct"),
                            ),
         "inventory_trend": _score_inventory(fundamentals.get("inventory_growth_yoy"), sales_growth),
     }
 
-    weighted_scores = {}
-    total_weight = 0.0
-    weighted_sum = 0.0
-
+    breakdown = {}
+    weighted_sum = available_weight = full_weight = 0.0
     for criterion, raw in raw_scores.items():
-        weight = WEIGHTS[criterion][idx]
-        weighted_scores[criterion] = {
-            "raw": raw,
-            "weight": weight,
-            "weighted": raw * weight,
-        }
-        weighted_sum += raw * weight
-        total_weight += weight * 5  # max possible contribution per criterion
+        weight = weights[criterion][idx]
+        full_weight += weight
+        breakdown[criterion] = {"raw": raw, "weight": weight, "weighted": raw * weight if raw is not None else None}
+        if raw is not None:
+            weighted_sum += raw * weight
+            available_weight += weight
 
-    total_score = int(weighted_sum / total_weight * 100) if total_weight > 0 else 0
+    coverage = available_weight / full_weight if full_weight else 0.0
+    total_score = int(weighted_sum / (available_weight * 5) * 100) if available_weight else 0
 
-    verdict = "AVOID"
-    if total_score >= 70:
+    if coverage < MIN_COVERAGE:
+        verdict = "INSUFFICIENT_DATA"
+    elif total_score >= 70:
         verdict = "BUY_CANDIDATE"
     elif total_score >= 50:
         verdict = "WATCHLIST"
+    else:
+        verdict = "AVOID"
 
     return {
         "symbol": fundamentals.get("symbol", ""),
         "category": category,
         "total_score": total_score,
+        "coverage": round(coverage, 2),
         "verdict": verdict,
-        "breakdown": weighted_scores,
+        "breakdown": breakdown,
+        "peer_pe": round(peer, 1),
+        "peer_pe_source": peer_pe_label(peer_source, use_forward),
+        "scorer_version": SCORER_VERSION,
     }
+
+
+def peer_pe_label(source: str, forward: bool) -> str:
+    return f"{'forward ' if forward else ''}P/E medijan ({source})"
 
 
 def hard_exclude(fund: dict, category: str) -> tuple[bool, str]:

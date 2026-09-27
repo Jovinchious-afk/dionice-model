@@ -1,0 +1,242 @@
+{
+  "_meta": {
+    "description": "Median trailing and forward P/E per yfinance sector and industry across the stock universe; used by analysis/scorer.py",
+    "stocks": 508,
+    "refreshed_at": "2026-09-27",
+    "min_peers": 5
+  },
+  "sectors": {
+    "Basic Materials": {
+      "n": 31,
+      "pe_median": 20.7,
+      "forward_pe_median": 16.1
+    },
+    "Communication Services": {
+      "n": 35,
+      "pe_median": 20.5,
+      "forward_pe_median": 12.5
+    },
+    "Consumer Cyclical": {
+      "n": 38,
+      "pe_median": 19.8,
+      "forward_pe_median": 14.5
+    },
+    "Consumer Defensive": {
+      "n": 18,
+      "pe_median": 22.1,
+      "forward_pe_median": 14.8
+    },
+    "Energy": {
+      "n": 30,
+      "pe_median": 16.2,
+      "forward_pe_median": 12.0
+    },
+    "Financial Services": {
+      "n": 72,
+      "pe_median": 12.6,
+      "forward_pe_median": 10.5
+    },
+    "Healthcare": {
+      "n": 63,
+      "pe_median": 30.6,
+      "forward_pe_median": 16.7
+    },
+    "Industrials": {
+      "n": 68,
+      "pe_median": 30.6,
+      "forward_pe_median": 20.4
+    },
+    "Real Estate": {
+      "n": 42,
+      "pe_median": 27.5,
+      "forward_pe_median": 21.5
+    },
+    "Technology": {
+      "n": 78,
+      "pe_median": 37.0,
+      "forward_pe_median": 21.5
+    },
+    "Utilities": {
+      "n": 33,
+      "pe_median": 19.2,
+      "forward_pe_median": 16.7
+    }
+  },
+  "industries": {
+    "Aerospace & Defense": {
+      "n": 9,
+      "pe_median": 33.3,
+      "forward_pe_median": 23.1
+    },
+    "Asset Management": {
+      "n": 9,
+      "pe_median": 15.2,
+      "forward_pe_median": 10.2
+    },
+    "Auto Manufacturers": {
+      "n": 8,
+      "pe_median": null,
+      "forward_pe_median": 6.6
+    },
+    "Banks - Regional": {
+      "n": 38,
+      "pe_median": 12.3,
+      "forward_pe_median": 10.4
+    },
+    "Biotechnology": {
+      "n": 21,
+      "pe_median": 21.0,
+      "forward_pe_median": 20.5
+    },
+    "Building Products & Equipment": {
+      "n": 7,
+      "pe_median": 26.3,
+      "forward_pe_median": 18.0
+    },
+    "Communication Equipment": {
+      "n": 5,
+      "pe_median": null,
+      "forward_pe_median": 20.9
+    },
+    "Credit Services": {
+      "n": 6,
+      "pe_median": 14.9,
+      "forward_pe_median": 11.8
+    },
+    "Diagnostics & Research": {
+      "n": 6,
+      "pe_median": 35.0,
+      "forward_pe_median": 21.9
+    },
+    "Discount Stores": {
+      "n": 5,
+      "pe_median": 16.3,
+      "forward_pe_median": 16.5
+    },
+    "Drug Manufacturers - General": {
+      "n": 9,
+      "pe_median": 38.7,
+      "forward_pe_median": 15.6
+    },
+    "Entertainment": {
+      "n": 12,
+      "pe_median": 25.0,
+      "forward_pe_median": 18.8
+    },
+    "Healthcare Plans": {
+      "n": 7,
+      "pe_median": 23.5,
+      "forward_pe_median": 13.4
+    },
+    "Information Technology Services": {
+      "n": 5,
+      "pe_median": null,
+      "forward_pe_median": 11.3
+    },
+    "Integrated Freight & Logistics": {
+      "n": 8,
+      "pe_median": 27.3,
+      "forward_pe_median": 20.5
+    },
+    "Internet Content & Information": {
+      "n": 11,
+      "pe_median": 23.6,
+      "forward_pe_median": 9.6
+    },
+    "Medical Devices": {
+      "n": 9,
+      "pe_median": 26.9,
+      "forward_pe_median": 16.5
+    },
+    "Medical Instruments & Supplies": {
+      "n": 5,
+      "pe_median": 31.9,
+      "forward_pe_median": 14.4
+    },
+    "Oil & Gas E&P": {
+      "n": 14,
+      "pe_median": 10.5,
+      "forward_pe_median": 8.7
+    },
+    "Oil & Gas Midstream": {
+      "n": 8,
+      "pe_median": 22.8,
+      "forward_pe_median": 17.1
+    },
+    "Packaged Foods": {
+      "n": 6,
+      "pe_median": null,
+      "forward_pe_median": 10.9
+    },
+    "REIT - Industrial": {
+      "n": 9,
+      "pe_median": 28.3,
+      "forward_pe_median": 34.4
+    },
+    "REIT - Mortgage": {
+      "n": 14,
+      "pe_median": 9.0,
+      "forward_pe_median": 6.5
+    },
+    "REIT - Specialty": {
+      "n": 6,
+      "pe_median": 47.6,
+      "forward_pe_median": 35.3
+    },
+    "Resorts & Casinos": {
+      "n": 6,
+      "pe_median": null,
+      "forward_pe_median": 14.4
+    },
+    "Semiconductor Equipment & Materials": {
+      "n": 5,
+      "pe_median": 54.6,
+      "forward_pe_median": 26.9
+    },
+    "Semiconductors": {
+      "n": 10,
+      "pe_median": 45.6,
+      "forward_pe_median": 23.0
+    },
+    "Software - Application": {
+      "n": 19,
+      "pe_median": 25.2,
+      "forward_pe_median": 18.8
+    },
+    "Software - Infrastructure": {
+      "n": 21,
+      "pe_median": 37.5,
+      "forward_pe_median": 34.5
+    },
+    "Specialty Chemicals": {
+      "n": 13,
+      "pe_median": 30.3,
+      "forward_pe_median": 19.5
+    },
+    "Specialty Industrial Machinery": {
+      "n": 14,
+      "pe_median": 33.1,
+      "forward_pe_median": 22.0
+    },
+    "Telecom Services": {
+      "n": 6,
+      "pe_median": null,
+      "forward_pe_median": 8.9
+    },
+    "Trucking": {
+      "n": 6,
+      "pe_median": null,
+      "forward_pe_median": 21.3
+    },
+    "Utilities - Regulated Electric": {
+      "n": 21,
+      "pe_median": 19.2,
+      "forward_pe_median": 15.9
+    },
+    "Utilities - Regulated Water": {
+      "n": 6,
+      "pe_median": 20.1,
+      "forward_pe_median": 20.1
+    }
+  }
+}

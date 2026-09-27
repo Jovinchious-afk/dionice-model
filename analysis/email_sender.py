@@ -1,9 +1,12 @@
 """
-Composes and sends the weekly/monthly newsletter via Gmail SMTP.
-Email is in English. Evidence table included for each recommendation.
+Composes and sends the weekly/monthly newsletter and the quarterly learning
+report via Gmail SMTP. Text is Croatian; an evidence table is included for each
+recommendation.
 """
 
+import html
 import os
+import re
 import smtplib
 import ssl
 from datetime import datetime
@@ -32,6 +35,62 @@ def _fmt(val: Any, suffix: str = "", decimals: int = 2) -> str:
         return f"{float(val):.{decimals}f}{suffix}"
     except (TypeError, ValueError):
         return str(val)
+
+
+def inline_markdown(text: str) -> str:
+    """Escapes HTML and turns **bold** into <strong>."""
+    text = html.escape(text, quote=False)
+    return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+
+
+def markdown_to_html(md: str) -> str:
+    """
+    The small markdown subset the learning report uses (headings, bullets, pipe
+    tables, bold, paragraphs) as inline-styled HTML that Gmail renders.
+    """
+    out: list[str] = []
+    in_list = False
+    table: list[list[str]] = []
+
+    def flush_table():
+        if not table:
+            return
+        header, *body = table
+        head = "".join(f"<th style='padding:4px 8px;text-align:left;background:#f0f0f0;'>{inline_markdown(c)}</th>" for c in header)
+        rows = "".join(
+            "<tr>" + "".join(f"<td style='padding:4px 8px;border-top:1px solid #eee;'>{inline_markdown(c)}</td>" for c in r) + "</tr>"
+            for r in body
+        )
+        out.append(f"<table style='border-collapse:collapse;font-size:13px;margin:6px 0 12px;'><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table>")
+        table.clear()
+
+    for raw in md.splitlines():
+        line = raw.rstrip()
+        if line.startswith("|"):
+            cells = [c.strip() for c in line.strip("|").split("|")]
+            if not all(set(c) <= set("-: ") for c in cells):
+                table.append(cells)
+            continue
+        flush_table()
+        if line.lstrip().startswith(("- ", "* ")):
+            if not in_list:
+                out.append("<ul style='margin:4px 0 10px;padding-left:20px;'>")
+                in_list = True
+            out.append(f"<li style='font-size:14px;margin:3px 0;'>{inline_markdown(line.lstrip()[2:])}</li>")
+            continue
+        if in_list:
+            out.append("</ul>")
+            in_list = False
+        heading = re.match(r"^(#{1,4})\s+(.*)", line)
+        if heading:
+            size = {1: 20, 2: 17, 3: 15, 4: 14}[len(heading.group(1))]
+            out.append(f"<h3 style='font-size:{size}px;margin:16px 0 6px;'>{inline_markdown(heading.group(2))}</h3>")
+        elif line.strip():
+            out.append(f"<p style='font-size:14px;margin:6px 0;'>{inline_markdown(line)}</p>")
+    flush_table()
+    if in_list:
+        out.append("</ul>")
+    return "\n".join(out)
 
 
 def _has_text(value) -> bool:
@@ -142,13 +201,20 @@ def _build_stock_block(rec: dict) -> str:
     if hype_note:
         hype_note_html = f"<p style='background:#fff3cd;padding:6px 10px;border-radius:4px;font-size:12px;margin:6px 0;'>⚠️ {hype_note}</p>"
 
-    guard_note = rec.get("sell_guard_note", "")
     guard_html = ""
-    if guard_note:
-        guard_html = (
-            "<p style='background:#e8f1fa;border-left:4px solid #1f5f8b;padding:8px 12px;"
-            f"border-radius:0 4px 4px 0;font-size:13px;margin:8px 0;'>🛡️ {guard_note}</p>"
+    for icon, key in (("🛡️", "sell_guard_note"), ("⚖️", "concentration_note")):
+        if rec.get(key):
+            guard_html += (
+                "<p style='background:#e8f1fa;border-left:4px solid #1f5f8b;padding:8px 12px;"
+                f"border-radius:0 4px 4px 0;font-size:13px;margin:8px 0;'>{icon} {rec[key]}</p>"
+            )
+    if rec.get("entry_plan_note"):
+        guard_html += (
+            "<p style='background:#eaf7ea;border-left:4px solid #1a7a1a;padding:8px 12px;"
+            f"border-radius:0 4px 4px 0;font-size:13px;margin:8px 0;'>🎯 {rec['entry_plan_note']}</p>"
         )
+    if rec.get("second_pass_note"):
+        guard_html += f"<p style='font-size:12px;color:#555;margin:6px 0;'>🔎 {rec['second_pass_note']}</p>"
 
     # investor_view / counter_argument are deliberately not rendered: the model still writes them
     # (and they are stored in analysis_log), but they made the newsletter long enough for Gmail to clip it
@@ -201,6 +267,15 @@ def _build_stock_block(rec: dict) -> str:
 </div>"""
 
 
+def _weight_cell(position: dict, cap: float | None) -> str:
+    weight = position.get("weight")
+    if weight is None:
+        return "<td style='padding:4px 10px;'>N/A</td>"
+    over = cap is not None and weight >= cap
+    style = "color:#b30000;font-weight:700;" if over else ""
+    return f"<td style='padding:4px 10px;{style}'>{weight * 100:.0f}%{' ⚠️' if over else ''}</td>"
+
+
 def build_html_email(
     summary: dict,
     recommendations: list[dict],
@@ -208,6 +283,7 @@ def build_html_email(
     portfolio_positions: list[dict],
     email_type: str = "WEEKLY",
     cash_line: str | None = None,
+    concentration_cap: float | None = None,
 ) -> str:
     date_str = summary.get("date", datetime.now().strftime("%Y-%m-%d"))
     market_comment = summary.get("overall_market_comment", "")
@@ -244,9 +320,15 @@ def build_html_email(
             f"<td style='padding:4px 10px;'>{p.get('shares','')}</td>"
             f"<td style='padding:4px 10px;'>{p.get('avg_cost','N/A')}</td>"
             f"<td style='padding:4px 10px;'>{p.get('current_price','N/A')}</td>"
-            f"<td style='padding:4px 10px;font-weight:600;color:{'#1a7a1a' if str(p.get('pnl_pct',0)).startswith('-') == False else '#b30000'};'>"
-            f"{p.get('pnl_pct','N/A')}</td></tr>"
+            f"<td style='padding:4px 10px;font-weight:600;color:{'#b30000' if str(p.get('pnl_pct', '')).startswith('-') else '#1a7a1a'};'>"
+            f"{p.get('pnl_pct','N/A')}</td>"
+            f"{_weight_cell(p, concentration_cap)}</tr>"
             for p in portfolio_positions
+        )
+        cap_note = (
+            f"<p style='font-size:12px;color:#555;margin:4px 0;'>Udio = pozicija / (sve pozicije + gotovina). "
+            f"Limit po poziciji: {concentration_cap * 100:.0f}% — iznad njega agent ne predlaže dokup.</p>"
+            if concentration_cap else ""
         )
         portfolio_html = f"""
 <h3 style='margin:16px 0 8px;'>Portfolio</h3>
@@ -257,9 +339,11 @@ def build_html_email(
     <th style='padding:6px 10px;text-align:left;'>Avg cost</th>
     <th style='padding:6px 10px;text-align:left;'>Price now</th>
     <th style='padding:6px 10px;text-align:left;'>P&L %</th>
+    <th style='padding:6px 10px;text-align:left;'>Udio</th>
   </tr></thead>
   <tbody>{rows}</tbody>
 </table>
+{cap_note}
 {cash_html}"""
 
     # Stock recommendation blocks

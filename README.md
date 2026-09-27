@@ -3,12 +3,17 @@
 AI-powered stock analysis system for a small retail investor using Revolut Basic.
 
 **What it does:**
-- Sends a stock newsletter every **Tuesday and Thursday at 15:00 CET**
-- Sends a monthly deep portfolio report on the **first Saturday of each month**
-- Tracks your portfolio via a minimal **Streamlit web app**
-- Logs agent recommendations vs your decisions for backtesting
+- Sends a stock newsletter every **Tuesday and Thursday** (Croatian)
+- Sends a monthly portfolio review on the **1st of each month**
+- Sends a **quarterly learning report**: how past calls did against the S&P 500, and
+  proposed lessons and parameter changes that you approve in the app
+- Tracks your portfolio via a **Streamlit web app**
+- Logs agent recommendations vs your decisions and scores them against the S&P 500
 
-**Cost: ~$1/month** (Claude API Haiku only)
+**Cost: ~$3-4/month** (Claude Haiku 4.5 via the Message Batches API for routine analysis,
+Sonnet 5 for second opinions on buy and sell calls, Opus 5 once a quarter). Spend is
+logged per run and shown on the app's "Učenje" page; above the monthly budget the
+second opinions are skipped.
 
 ---
 
@@ -30,9 +35,12 @@ AI-powered stock analysis system for a small retail investor using Revolut Basic
 
 1. Go to [supabase.com](https://supabase.com) → New Project
 2. Remember your project password
-3. Go to **SQL Editor** → paste the contents of `data/schema.sql` → Run
+3. Go to **SQL Editor** → run `data/schema.sql`, then each `data/schema_v2.sql` … `schema_v8.sql` in order
 4. Update the VG seed row: change `price_per_share` to your actual average cost in EUR
 5. Go to **Settings → API** → copy **Project URL** and **anon public key**
+
+Every new `schema_vN.sql` is additive (`IF NOT EXISTS`) and the code keeps working
+until it has been run; features that need it (e.g. the "Učenje" page) say so.
 
 ---
 
@@ -147,53 +155,87 @@ Your portfolio tracker will be live at a URL like:
 
 ```
 dionice-model/
-├── .github/workflows/       # GitHub Actions (scheduling)
-│   ├── weekly_newsletter.yml
-│   ├── monthly_report.yml
-│   └── update_decision_prices.yml
+├── .github/workflows/          # GitHub Actions (scheduling)
+├── .claude/skills/verify/      # how Claude Code verifies a change (tests, dry runs, screenshots)
+├── CLAUDE.md                   # conventions for Claude Code sessions
 ├── app/
-│   └── portfolio_app.py     # Streamlit web app
+│   └── portfolio_app.py        # Streamlit web app (incl. "Učenje": report, approvals, AI spend)
 ├── analysis/
-│   ├── fundamentals.py      # yfinance data fetcher + cache
-│   ├── scorer.py            # 5-category scoring system
-│   ├── congress_tracker.py  # Senate/House Stock Watcher
-│   ├── sentiment_tracker.py # StockTwits hype / anti-signal
-│   ├── insider_tracker.py   # SEC Form 4 open-market insider trades
-│   ├── ai_analyst.py        # Claude API synthesis
-│   └── email_sender.py      # Gmail SMTP + HTML builder
+│   ├── ai_analyst.py           # prompts, JSON schema, batch runner, deterministic rules
+│   ├── scorer.py               # 5-category score, P/E vs industry median
+│   ├── fundamentals.py         # yfinance data fetcher + cache
+│   ├── checklist.py            # the investor's own checklist + sell-guard signals
+│   ├── sentiment_tracker.py    # StockTwits hype (message velocity vs company size)
+│   ├── insider_tracker.py      # SEC Form 4 open-market insider trades
+│   ├── analysis_history.py     # per-ticker memory + features for the learning report
+│   ├── learning.py             # statistics of the quarterly learning report
+│   ├── params.py               # tunable parameters (defaults + approved overrides)
+│   ├── usage.py                # token cost per run, monthly budget guard
+│   ├── prices.py, portfolio.py, macro_context.py, sector_context.py, …
+│   └── email_sender.py         # Gmail SMTP + HTML builders
 ├── scripts/
-│   ├── run_weekly.py        # Orchestrates full weekly run
-│   ├── run_monthly.py       # Monthly deep report
-│   └── update_prices.py    # Fills 30/90/180d prices
-├── data/
-│   └── schema.sql           # Supabase database schema
-├── requirements.txt
-├── .env.example             # Template for local .env
-└── .gitignore
+│   ├── run_weekly.py           # newsletter
+│   ├── run_monthly.py          # monthly portfolio review
+│   ├── run_quarterly_review.py # quarterly learning report
+│   ├── update_prices.py        # 30/90/180-day outcomes vs S&P 500, buy-zone fills
+│   ├── refresh_universe.py, refresh_gems.py, refresh_sector_benchmarks.py  # quarterly
+│   └── verify_screens.py       # screenshots for verification (dev only)
+├── data/                       # universe, gems, sector benchmarks, schema_v*.sql
+├── tests/                      # pytest, no network
+├── requirements.txt            # production (GitHub Actions, Streamlit Cloud)
+└── requirements-dev.txt        # + pytest, playwright
+```
+
+## Development
+
+```powershell
+pip install -r requirements-dev.txt
+python -m playwright install chromium   # once, for screenshots
+python -m pytest -q                     # tests, no network, no cost
+python scripts/run_weekly.py --dry-run --limit 1 --sync   # ~$0.05, no email, no DB writes
+python scripts/run_quarterly_review.py --dry-run --no-ai  # learning statistics, free
 ```
 
 ---
 
 ## How the AI Analyzes Stocks
 
-1. **Discovers tickers** from a seeded sector-rotating universe sample, Congress trades, your portfolio, and manual watchlist
-2. **Fetches fundamentals** (P/E, PEG, FCF, margins, debt, etc.) via yfinance with 24h cache
-3. **Scores each stock** 0-100 using category-specific weights (quality compounder, value/cyclical, turnaround, speculative growth, dividend/defensive)
-4. **Claude analyzes** all signals and produces: action, buy zone, target, thesis, catalyst, downside scenario, evidence table
-5. **Email is sent** with max 4-7 actions; "NO TRADE" is a valid primary output
+1. **Discovers tickers** from a random sector-rotating universe sample, your portfolio and hidden gems
+2. **Fetches fundamentals** (P/E, PEG, FCF, margins, debt, insiders, inventories, seasonality) via yfinance
+3. **Scores each stock** 0-100 using category-specific weights; P/E is compared with the industry median
+4. **Claude analyzes** all signals (one Message Batch, cached shared prompt, JSON schema) and produces:
+   action, buy zone, target, thesis, catalyst, downside scenario; the evidence table comes from the data
+5. **Deterministic rules** run on every answer (hype block, confidence floor, sell guard,
+   30% concentration cap, "part now, rest at the zone" for high-confidence buys)
+6. **Buy candidates get a second opinion** from a stronger model while the monthly budget allows
+7. **Email is sent** with max 4-7 actions; "NO TRADE" is a valid primary output
 
-**Hype rule:** StockTwits hype score ≥7/10 → automatically blocked from BUY → maximum WATCHLIST  
+**Hype rule:** StockTwits message velocity relative to company size ≥7/10 → no BUY, maximum WATCHLIST  
+**Concentration rule:** no ADD_ON_DIP for a position above 30% of total capital (positions + cash)  
+**Sell rule:** SELL/REDUCE on a held stock only when the business deteriorated, not the price  
 **Congress rule:** weak signal only — idea source, never a buy trigger  
 **No trade rule:** every recommendation is compared to "hold cash or add to best existing position"
+
+## How the Model Learns
+
+Every analysed stock — including the ones the filters drop before the AI — is logged with
+its features. Once a quarter `run_quarterly_review.py` measures the calls against the S&P 500
+(by action, confidence, category, score, hype; buy zone vs buying at once; which scorer
+criteria predicted returns; your real trades vs the same money in SPY). Claude turns the
+tables into a report, lessons and bounded parameter proposals. Nothing changes by itself:
+you approve lessons and parameters on the "Učenje" page, and the next report measures
+results before and after each change.
 
 ---
 
 ## Email Schedule
 
-- **Tuesday 15:00 CET** — Weekly newsletter
-- **Thursday 15:00 CET** — Weekly newsletter  
-- **First Saturday of month, 09:00 UTC** — Monthly deep report
+- **Tuesday and Thursday, 13:00 UTC** — Weekly newsletter (GitHub starts scheduled jobs late,
+  and the batch adds up to an hour, so it usually arrives in the evening)
+- **1st of each month, 09:00 UTC** — Monthly portfolio review
 - **Wednesday 10:00 UTC** — Background decision scoring vs S&P 500 + buy-zone check (no email)
+- **1st of Jan/Apr/Jul/Oct** — universe + sector benchmark refresh (06:00 UTC), then the
+  quarterly learning report (09:00 UTC)
 
 Note: Schedules use UTC. Summer = CEST (UTC+2), so 13:00 UTC = 15:00 CEST.
 

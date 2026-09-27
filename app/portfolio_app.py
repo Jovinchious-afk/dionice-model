@@ -13,7 +13,8 @@ import streamlit as st
 import yfinance as yf
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from analysis.portfolio import compute_holdings
+from analysis.params import DEFAULTS, DESCRIPTIONS, load_params
+from analysis.portfolio import compute_holdings, eur_usd_on
 from analysis.supabase_client import SupabaseClient
 
 st.set_page_config(
@@ -66,6 +67,23 @@ def load_decisions(db) -> pd.DataFrame:
     except Exception as e:
         st.error(f"Failed to load decisions: {e}")
         return pd.DataFrame()
+
+
+def load_decision_outcomes(db) -> pd.DataFrame:
+    """
+    Outcome columns of every decision. The metrics used to be computed on the 100
+    rows the page lists, which by September held no resolved outcome at all and
+    showed 0 correct / 0 wrong while the table had 10 and 7.
+    """
+    cols = "user_action,outcome_30d,outcome_90d,outcome_180d,excess_return_30d,excess_return_90d"
+    try:
+        return pd.DataFrame(db.fetch_all("decisions", cols))
+    except Exception:
+        try:
+            return pd.DataFrame(db.fetch_all("decisions", "user_action,outcome_30d,outcome_90d,outcome_180d"))
+        except Exception as e:
+            st.error(f"Failed to load decision outcomes: {e}")
+            return pd.DataFrame()
 
 
 def load_retired_tickers(db) -> pd.DataFrame:
@@ -242,7 +260,7 @@ def fetch_live_prices(symbols: tuple) -> dict:
 st.sidebar.title("📊 Dionice")
 page = st.sidebar.radio(
     "Navigate",
-    ["Portfolio", "Log Trade", "Watchlist", "Decisions", "Newsletteri"],
+    ["Portfolio", "Log Trade", "Watchlist", "Decisions", "Newsletteri", "Učenje"],
     index=0,
 )
 st.sidebar.markdown("---")
@@ -291,16 +309,16 @@ if page == "Portfolio":
         )
         total_pnl = total_value - total_invested if total_value else None
 
-        # % allocation per position (numeric, before string formatting)
+        # Share of total capital (positions + cash) — the base of the concentration cap
+        capital_usd = total_value + cash["cash_usd"] + cash["cash_eur"] * eur_usd_on(None)
         display["Allocation %"] = display["Value (USD)"].apply(
-            lambda v: round(v / total_value * 100, 1) if total_value and v is not None else None
+            lambda v: round(v / capital_usd * 100, 1) if capital_usd and v is not None else None
         )
-
-        max_allocation = display["Allocation %"].max()
-        top_symbol = (
-            display.loc[display["Allocation %"].idxmax(), "Symbol"]
-            if pd.notna(max_allocation) else None
-        )
+        concentration_cap = load_params(db)["concentration_cap"]
+        over_cap = [
+            (r["Symbol"], r["Allocation %"]) for _, r in display.iterrows()
+            if pd.notna(r["Allocation %"]) and r["Allocation %"] >= concentration_cap * 100
+        ]
 
         # Summary metrics
         col1, col2, col3, col4 = st.columns(4)
@@ -325,7 +343,7 @@ if page == "Portfolio":
             lambda s: f"${live_prices.get(s):,.2f}" if live_prices.get(s) else "N/A"
         )
         display["Allocation %"] = display["Allocation %"].apply(
-            lambda v: f"{v:.1f}%" if v is not None else "N/A"
+            lambda v: f"{v:.1f}%" if pd.notna(v) else "N/A"
         )
         for col in ["Value (USD)", "P&L (USD)"]:
             display[col] = display[col].apply(
@@ -340,15 +358,18 @@ if page == "Portfolio":
         st.subheader("Current Holdings")
         st.dataframe(
             display[["Symbol", "Company", "Shares", "Avg Cost (USD)", "Total Cost (USD)",
-                      "Price Now (USD)", "Value (USD)", "P&L (USD)", "P&L %", "Allocation %"]],
+                      "Price Now (USD)", "Value (USD)", "P&L (USD)", "P&L %", "Allocation %"]].rename(
+                columns={"Allocation %": "Udio u kapitalu"}),
             use_container_width=True, hide_index=True,
         )
+        st.caption(f"Udio u kapitalu = vrijednost pozicije / (sve pozicije + gotovina). "
+                   f"Limit po poziciji: {concentration_cap * 100:.0f}% (mijenja se na stranici Učenje).")
 
-        if top_symbol is not None and max_allocation >= 90:
+        for symbol, share in over_cap:
             st.warning(
-                f"⚠️ {top_symbol} is {max_allocation:.1f}% of portfolio value. "
-                "This is single-stock concentration, not diversification — "
-                "consider whether new capacity should go elsewhere."
+                f"⚠️ {symbol} je {share:.0f}% ukupnog kapitala — iznad limita od {concentration_cap * 100:.0f}%. "
+                "Agent zato ne predlaže dokup te dionice; teza ostaje, ali novi novac ide u druge dionice. "
+                "Tvoje pravilo iz početnog opisa projekta: smanji poziciju ako se previše udalji od ciljane alokacije."
             )
 
         with st.expander("📝 Teza po poziciji — zašto držiš i što bi te natjeralo da prodaš"):
@@ -585,20 +606,34 @@ elif page == "Decisions":
     if decisions_df.empty:
         st.info("No decisions recorded yet.")
     else:
-        total = len(decisions_df)
-        followed = len(decisions_df[decisions_df["user_action"] == "FOLLOWED"])
-        correct_30 = len(decisions_df[decisions_df["outcome_30d"] == "correct"])
-        wrong_30 = len(decisions_df[decisions_df["outcome_30d"] == "wrong"])
+        outcomes = load_decision_outcomes(db)
+        total_all = len(outcomes)
+        followed = int((outcomes.get("user_action") == "FOLLOWED").sum()) if not outcomes.empty else 0
+
+        def counts(col: str) -> tuple[int, int]:
+            if outcomes.empty or col not in outcomes:
+                return 0, 0
+            return int((outcomes[col] == "correct").sum()), int((outcomes[col] == "wrong").sum())
+
+        correct_30, wrong_30 = counts("outcome_30d")
+        correct_90, wrong_90 = counts("outcome_90d")
 
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total recommendations", total)
-        col2.metric("You followed", f"{followed}/{total}")
-        col3.metric("Bolje od S&P @30d", correct_30)
-        col4.metric("Lošije od S&P @30d", wrong_30)
+        col1.metric("Sve preporuke", total_all)
+        col2.metric("Pratio si", f"{followed}/{total_all}")
+        col3.metric("30 dana: bolje / lošije od S&P", f"{correct_30} / {wrong_30}")
+        col4.metric("90 dana: bolje / lošije od S&P", f"{correct_90} / {wrong_90}")
+        if not outcomes.empty and "excess_return_30d" in outcomes:
+            scored = outcomes[outcomes["outcome_30d"].isin(["correct", "wrong"])]
+            excess = pd.to_numeric(scored["excess_return_30d"], errors="coerce").dropna()
+            if len(excess):
+                st.caption(f"Kupnje koje su se stvarno dogodile (zona dosegnuta): prosječno {excess.mean():+.1f} pp "
+                           f"vs S&P 500 nakon 30 dana (n={len(excess)}).")
         st.caption(
             "Ishod se mjeri u odnosu na S&P 500 u istom razdoblju. WATCHLIST/WAIT i buy zone koje nisu "
-            "dosegnute su 'neutral' — to nisu bile kupnje."
+            "dosegnute su 'neutral' — to nisu bile kupnje. Dublja analiza: stranica Učenje."
         )
+        total = len(decisions_df)
 
         now = datetime.now(timezone.utc)
 
@@ -785,3 +820,148 @@ elif page == "Newsletteri":
                     watchlist_week = content.get("watchlist_this_week", [])
                     if watchlist_week:
                         st.markdown(f"**Watchlist:** {', '.join(watchlist_week)}")
+
+# ── PAGE 6: Učenje (quarterly learning report and model parameters) ──────────
+
+elif page == "Učenje":
+    from analysis.learning import stats_markdown
+
+    st.title("Učenje")
+    st.caption(
+        "Kvartalni izvještaj mjeri kako su preporuke prošle u odnosu na S&P 500 i predlaže promjene. "
+        "Ništa se ne mijenja samo od sebe: lekcije i parametre ovdje odobravaš ili odbijaš."
+    )
+
+    def table_rows(name: str) -> list[dict] | None:
+        """Rows of a schema_v8 table, or None when the table does not exist yet."""
+        try:
+            return db.fetch_all(name)
+        except Exception:
+            return None
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    reports = table_rows("learning_reports")
+    if reports is None:
+        st.warning("Za ovu stranicu treba pokrenuti **data/schema_v8.sql** u Supabase SQL Editoru.")
+        st.stop()
+
+    # AI spend this month against the budget
+    params_now = load_params(db)
+    usage_rows = table_rows("llm_usage") or []
+    month_prefix = datetime.now(timezone.utc).strftime("%Y-%m")
+    month_cost = sum(float(r.get("cost_usd") or 0) for r in usage_rows if str(r.get("created_at", "")).startswith(month_prefix))
+    budget = float(params_now["monthly_budget_usd"])
+    col1, col2 = st.columns(2)
+    col1.metric("AI trošak ovaj mjesec", f"${month_cost:.2f}", help="Zbroj svih poziva Claudea (newsletter, provjere, izvještaji)")
+    col2.metric("Mjesečni budžet", f"${budget:.2f}")
+    st.progress(min(month_cost / budget, 1.0) if budget else 0.0)
+    if usage_rows:
+        with st.expander("Potrošnja po poslu"):
+            udf = pd.DataFrame(usage_rows)
+            udf["mjesec"] = udf["created_at"].astype(str).str[:7]
+            udf["cost_usd"] = pd.to_numeric(udf["cost_usd"], errors="coerce")
+            st.dataframe(udf.groupby(["mjesec", "job", "model"], as_index=False)["cost_usd"].sum()
+                         .sort_values(["mjesec", "cost_usd"], ascending=[False, False]),
+                         use_container_width=True, hide_index=True)
+
+    # Latest report
+    st.subheader("Zadnji kvartalni izvještaj")
+    if not reports:
+        st.info("Još nema izvještaja — prvi se radi 1. u mjesecu nakon kraja kvartala (ili ručno u GitHub Actions).")
+    else:
+        latest = sorted(reports, key=lambda r: str(r.get("created_at")), reverse=True)[0]
+        st.caption(f"{latest.get('period_label', '')} · {str(latest.get('created_at', ''))[:10]} · "
+                   f"model {latest.get('model') or 'bez AI'}")
+        st.markdown(latest.get("report_markdown") or "")
+        stats = latest.get("stats_json") or {}
+        if isinstance(stats, str):
+            try:
+                stats = json.loads(stats)
+            except Exception:
+                stats = {}
+        if stats:
+            with st.expander("Sve tablice"):
+                st.markdown(stats_markdown(stats))
+
+    # Lessons
+    st.subheader("Lekcije za analitičara")
+    lessons = table_rows("model_lessons") or []
+    active_lessons = [row for row in lessons if row.get("status") == "ACTIVE"]
+    proposed_lessons = [row for row in lessons if row.get("status") == "PROPOSED"]
+    if active_lessons:
+        current = sorted(active_lessons, key=lambda r: str(r.get("generated_at")), reverse=True)[0]
+        st.markdown(f"**Aktivne (ulaze u svaki prompt):**\n\n{current.get('lessons_text', '')}")
+        if st.button("Ukloni aktivne lekcije", key="retire_lessons"):
+            for row in active_lessons:
+                db.table("model_lessons").update({"status": "RETIRED", "decided_at": now_iso}).eq("id", row["id"]).execute()
+            st.rerun()
+    else:
+        st.caption("Nema aktivnih lekcija.")
+    for row in proposed_lessons:
+        st.markdown(f"**Prijedlog ({row.get('period_label', '')}):**\n\n{row.get('lessons_text', '')}")
+        c1, c2 = st.columns(2)
+        if c1.button("✅ Odobri lekcije", key=f"ok_lesson_{row['id']}"):
+            for old in active_lessons:
+                db.table("model_lessons").update({"status": "RETIRED", "decided_at": now_iso}).eq("id", old["id"]).execute()
+            db.table("model_lessons").update({"status": "ACTIVE", "decided_at": now_iso}).eq("id", row["id"]).execute()
+            st.rerun()
+        if c2.button("❌ Odbij", key=f"no_lesson_{row['id']}"):
+            db.table("model_lessons").update({"status": "REJECTED", "decided_at": now_iso}).eq("id", row["id"]).execute()
+            st.rerun()
+
+    # Parameters
+    st.subheader("Parametri modela")
+    param_rows = table_rows("model_params") or []
+
+    def activate(row_id: str, key: str) -> None:
+        db.table("model_params").update({"status": "RETIRED", "decided_at": now_iso}).eq("key", key).eq("status", "ACTIVE").execute()
+        db.table("model_params").update({"status": "ACTIVE", "decided_at": now_iso}).eq("id", row_id).execute()
+
+    for row in [r for r in param_rows if r.get("status") == "PROPOSED"]:
+        key = row.get("key")
+        value = row.get("value")
+        with st.container(border=True):
+            st.markdown(f"**Prijedlog: {key}** — {DESCRIPTIONS.get(key, '')}")
+            if key == "scorer_weights":
+                st.caption("Nove težine kriterija scorea (po kategoriji: QC, VC, TA, SG, DD):")
+                st.json(json.loads(value) if isinstance(value, str) else value, expanded=False)
+            else:
+                st.markdown(f"Sada **{params_now.get(key)}** → prijedlog **{value}**")
+            st.caption(row.get("reason") or "")
+            c1, c2 = st.columns(2)
+            if c1.button("✅ Odobri", key=f"ok_param_{row['id']}"):
+                activate(row["id"], key)
+                st.rerun()
+            if c2.button("❌ Odbij", key=f"no_param_{row['id']}"):
+                db.table("model_params").update({"status": "REJECTED", "decided_at": now_iso}).eq("id", row["id"]).execute()
+                st.rerun()
+
+    overview = [
+        {"Parametar": key, "Sada": params_now.get(key), "Zadano": default, "Opis": DESCRIPTIONS.get(key, "")}
+        for key, default in DEFAULTS.items() if key != "scorer_weights"
+    ]
+    st.dataframe(pd.DataFrame(overview).astype({"Sada": str, "Zadano": str}), use_container_width=True, hide_index=True)
+    if params_now.get("scorer_weights"):
+        st.caption("Težine scorea: aktivna je odobrena izmjena (ne zadane vrijednosti).")
+
+    with st.expander("✏️ Ručno promijeni parametar"):
+        editable = [k for k in DEFAULTS if k != "scorer_weights"]
+        key = st.selectbox("Parametar", editable, format_func=lambda k: f"{k} — {DESCRIPTIONS.get(k, '')}")
+        is_int = isinstance(DEFAULTS[key], int)
+        with st.form("param_form"):
+            value = st.number_input(
+                f"Nova vrijednost (sada {params_now.get(key)}, zadano {DEFAULTS[key]})",
+                value=float(params_now.get(key)), step=1.0 if is_int else 0.05,
+            )
+            reset = st.checkbox("Vrati na zadanu vrijednost")
+            if st.form_submit_button("Spremi"):
+                if not reset and value <= 0:
+                    st.error("Vrijednost mora biti veća od nule.")
+                else:
+                    db.table("model_params").update({"status": "RETIRED", "decided_at": now_iso}).eq("key", key).eq("status", "ACTIVE").execute()
+                    if not reset:
+                        db.table("model_params").insert({"key": key, "value": int(value) if is_int else float(value),
+                                                         "status": "ACTIVE", "reason": "ručna promjena",
+                                                         "decided_at": now_iso}).execute()
+                    st.success("Spremljeno — vrijedi od idućeg newslettera.")
+                    st.rerun()

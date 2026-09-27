@@ -5,7 +5,9 @@ Each decision gets price_30d/90d/180d from the close on (or just before) that
 exact day — not whatever the price is when the job happens to run — and is
 scored against the S&P 500 (SPY) over the same days:
   - BUY_BELOW / ADD_ON_DIP: measured from the day the buy zone was first hit;
-    a zone not reached by the checkpoint is "neutral" (no trade would have happened)
+    a zone not reached by the checkpoint is "neutral" (no trade would have happened).
+    A call with the "starter" entry plan (part of the position bought at once)
+    counts from the recommendation day
   - HOLD: correct if the stock beat the index; SELL / REDUCE: correct if it lagged
   - WATCHLIST / WAIT: "neutral" — not a trade — with the returns kept for information
 It also writes a short AI retrospective for correct/wrong calls, auto-detects
@@ -20,7 +22,6 @@ Usage: python scripts/update_prices.py [--dry-run]
 
 import argparse
 import os
-import re
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -32,9 +33,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import anthropic
 import pandas as pd
-import yfinance as yf
 
+from analysis.prices import BENCHMARK, PriceBook, parse_buy_zone
 from analysis.supabase_client import get_supabase
+from analysis.usage import UsageTracker
 
 MODEL = "claude-haiku-4-5-20251001"
 CHECKPOINTS = [(30, "30d"), (90, "90d"), (180, "180d")]
@@ -42,7 +44,6 @@ BEARISH_ACTIONS = {"SELL", "REDUCE"}
 BUY_ZONE_ACTIONS = {"BUY_BELOW", "ADD_ON_DIP"}
 NEUTRAL_ACTIONS = {"WATCHLIST", "WAIT", "NO_ACTION", "NO_TRADE"}
 BUY_ZONE_MAX_AGE_DAYS = 180  # only applies to `decisions` — watchlist is bounded by status=ACTIVE instead
-BENCHMARK = "SPY"
 SCORING_VERSION = 2
 V7_MARKER = "scoring_version"  # column exists once data/schema_v7.sql has run
 
@@ -55,54 +56,6 @@ def parse_ts(value) -> datetime | None:
     except ValueError:
         return None
     return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
-
-
-class PriceBook:
-    """
-    Daily adjusted closes per ticker, fetched once from the earliest date any
-    caller needs — the job asks for the same tickers dozens of times per run.
-    """
-
-    def __init__(self):
-        self._closes: dict[str, pd.Series] = {}
-        self._start: dict[str, pd.Timestamp] = {}
-
-    def closes(self, ticker: str, since: datetime) -> pd.Series | None:
-        start = pd.Timestamp(since.date()) - pd.Timedelta(days=10)
-        if ticker not in self._closes or start < self._start[ticker]:
-            try:
-                raw = yf.Ticker(ticker).history(start=start.strftime("%Y-%m-%d"), auto_adjust=True)["Close"].dropna()
-                idx = pd.DatetimeIndex(raw.index)
-                if idx.tz is not None:
-                    idx = idx.tz_localize(None)
-                series = pd.Series(raw.values, index=idx.normalize())
-            except Exception as exc:
-                print(f"[update_prices] Price history failed for {ticker}: {exc}")
-                series = pd.Series(dtype=float)
-            self._closes[ticker] = series
-            self._start[ticker] = start
-        series = self._closes[ticker]
-        return series if len(series) else None
-
-    def close_on_or_before(self, ticker: str, day: datetime) -> float | None:
-        series = self.closes(ticker, day)
-        if series is None:
-            return None
-        upto = series[series.index <= pd.Timestamp(day.date())]
-        return float(upto.iloc[-1]) if len(upto) else None
-
-
-def parse_buy_zone(buy_zone_text: str | None) -> float | None:
-    """Extracts a numeric threshold from free text like '< $135.00' or '< 128.00'."""
-    if not buy_zone_text:
-        return None
-    match = re.search(r"[\d,]+\.?\d*", buy_zone_text.replace("$", ""))
-    if not match:
-        return None
-    try:
-        return float(match.group().replace(",", ""))
-    except ValueError:
-        return None
 
 
 def check_buy_zone(book: PriceBook, ticker: str, buy_zone_text: str | None, since: datetime) -> dict | None:
@@ -149,7 +102,10 @@ def score_checkpoint(dec: dict, rec_at: datetime, days: int, book: PriceBook) ->
         return None
 
     filled, filled_from_zone = True, False
-    if action in BUY_ZONE_ACTIONS and parse_buy_zone(dec.get("agent_buy_zone")) is not None:
+    # A "starter" call told the investor to buy part of the position right away,
+    # so it counts as a trade from the recommendation day even if the zone never came
+    starter = dec.get("entry_plan") == "starter"
+    if action in BUY_ZONE_ACTIONS and not starter and parse_buy_zone(dec.get("agent_buy_zone")) is not None:
         reached = parse_ts(dec.get("buy_zone_reached_at"))
         if reached and reached <= day:
             zone_price = dec.get("buy_zone_reached_price")
@@ -190,7 +146,7 @@ def neutral_note(dec: dict, checkpoint: str, s: dict) -> str:
     return f"{dec.get('agent_action')} nije kupnja — ishod je informativan: {comparison}."
 
 
-def generate_outcome_reasoning(dec: dict, checkpoint: str, s: dict) -> str | None:
+def generate_outcome_reasoning(dec: dict, checkpoint: str, s: dict, usage: UsageTracker | None = None) -> str | None:
     try:
         client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
         entry_label = "cijena kad je buy zona dosegnuta" if s["filled_from_zone"] else "cijena kod preporuke"
@@ -214,6 +170,8 @@ i samokritičan ako je ishod pogrešan. Bez uvoda, samo analiza."""
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}],
         )
+        if usage is not None:
+            usage.add_message(response, fallback_model=MODEL)
         text = "".join(block.text for block in response.content if block.type == "text").strip()
         return text or None
     except Exception as exc:
@@ -298,6 +256,7 @@ def main(dry_run: bool = False):
         print("[update_prices] Supabase credentials missing.")
         return
     now = datetime.now(timezone.utc)
+    usage = UsageTracker("update_prices")
 
     decisions = client.table("decisions").select("*").execute().data or []
     has_v7 = bool(decisions) and V7_MARKER in decisions[0]
@@ -356,7 +315,7 @@ def main(dry_run: bool = False):
             if s["outcome"] == "neutral":
                 updates[f"outcome_reasoning_{suffix}"] = neutral_note(dec, suffix, s)
             elif not dry_run:
-                reasoning = generate_outcome_reasoning(dec, suffix, s)
+                reasoning = generate_outcome_reasoning(dec, suffix, s, usage)
                 if reasoning:
                     updates[f"outcome_reasoning_{suffix}"] = reasoning
 
@@ -370,6 +329,9 @@ def main(dry_run: bool = False):
         if updates:
             _write(client, "decisions", dec["id"], updates, f"{ticker} (age {age_days}d)", dry_run)
 
+    print(usage.summary())
+    if not dry_run:
+        usage.save(client)
     print("[update_prices] Done.")
 
 

@@ -316,7 +316,12 @@ def fetch_fundamentals(
     try:
         stock = yf.Ticker(symbol)
         info = stock.info or {}
-        fast_info = stock.fast_info
+        # A delisted or renamed ticker does not raise: Yahoo answers with an almost
+        # empty info dict, so ANSS, COUP, CDAY and others were logged as healthy and
+        # never retired. No price and no market cap is treated as a failed fetch.
+        if not (_safe_get(info, "currentPrice") or _safe_get(info, "regularMarketPrice")) \
+                and not _safe_get(info, "marketCap"):
+            raise ValueError("no price or market cap from Yahoo (possibly delisted or renamed)")
 
         # --- Valuation ---
         pe = _safe_get(info, "trailingPE")
