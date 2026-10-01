@@ -7,157 +7,77 @@
     "last_updated": "2026-05-26",
     "removed_bankruptcies": "SPCE, NOVA, ASTR, SPWR, NKLA, GOEV, HYZN, ZEV, SOLO, MTTR, APPH, GTHX, BLUE, LTHM, LIVENT, GATO",
     "removed_misclassified": "STLA (large cap), CPER (ETF), VNET (delisted NASDAQ), BGSF (staffing not space), PIRS (pharma not quantum), TRMR (ad-tech not defense), MBOT (biotech not drones), HPNN (bank not energy), SVMK (went private)",
-    "note": "Prices move fast in this segment. A stock listed here may be above $12 today — the runtime check filters it automatically. Conversely, a mainstream stock that crashes below $12 is NOT a gem — only the thesis and sector make it one."
+    "note": "Prices move fast in this segment. A stock listed here may be above $12 today — the runtime check filters it automatically. Conversely, a mainstream stock that crashes below $12 is NOT a gem — only the thesis and sector make it one.",
+    "total": 0,
+    "refreshed_at": "2026-10-01",
+    "auto_screened_count": 0
   },
-
   "ai_and_data_infrastructure": {
     "description": "AI enablers, niche software, data platforms, edge AI — pre-mainstream recognition phase",
-    "tickers": [
-      "SOUN",  "BBAI",  "NNOX",  "PAYO",  "DM",
-      "AEYE",  "XPERI", "PERI",  "HCAT",  "VERI",
-      "IREN",  "OTRK",  "CXAI",  "CODA",  "SCWX",
-      "INOD",  "GFAI",  "BTDR",  "BKSY",  "LPSN",
-      "ABSI",  "RXRX"
-    ]
+    "tickers": []
   },
-
   "quantum_computing": {
     "description": "Quantum hardware and software — 5-10 year commercialisation horizon, binary risk",
-    "tickers": [
-      "IONQ",  "QBTS",  "QUBT",  "RGTI",  "ARQIT",
-      "CLBT",  "LIXT",  "SPIR"
-    ]
+    "tickers": []
   },
-
   "space_and_satellites": {
     "description": "Commercial space, launch services, earth observation, satellite communications",
-    "tickers": [
-      "RKLB",  "ASTS",  "LUNR",  "RDW",   "PL",
-      "SATL",  "GSAT",  "TSAT",  "MNTS",  "IRDM"
-    ]
+    "tickers": []
   },
-
   "energy_transition_renewables": {
     "description": "Solar, wind, grid storage, clean energy, sustainable fuels — energy independence thesis",
-    "tickers": [
-      "PLUG",  "FCEL",  "BLDP",  "CLNE",  "BE",
-      "STEM",  "ARRY",  "SHLS",  "MAXN",  "FTCI",
-      "RUN",   "AMRC",  "ENPH",  "FLNC",  "SUNW",
-      "CSIQ",  "SEDG",  "FLUX",  "HYLN",  "NUVVE",
-      "GEVO",  "OPAL",  "NRGV"
-    ]
+    "tickers": []
   },
-
   "ev_and_next_gen_transport": {
     "description": "Electric vehicles, charging infrastructure, urban air mobility, autonomous systems",
-    "tickers": [
-      "EVGO",  "CHPT",  "BLNK",  "MVST",  "JOBY",
-      "ACHR",  "WKHS",  "AYRO",  "AEVA",  "WPRT",
-      "REE",   "BLBD",  "IDEA"
-    ]
+    "tickers": []
   },
-
   "defense_drones_robotics": {
     "description": "Drone manufacturers, defense tech, autonomous systems, military AI — geopolitical spending surge",
-    "tickers": [
-      "RCAT",  "UAVS",  "ARLO",  "MVIS",  "KOPN",
-      "LAZR",  "INVZ",  "LIDR",  "INDI",  "BLDE",
-      "VTOL",  "OUST",  "SLDP",  "KULR",  "ONDS",
-      "AISP",  "MKFG"
-    ]
+    "tickers": []
   },
-
   "biotech_genomics": {
     "description": "Drug developers, diagnostics, biomarkers — pipeline-driven binary upside",
-    "tickers": [
-      "EDIT",  "SEER",  "FATE",  "NKTR",  "SELB",
-      "SGMO",  "FIXX",  "TGTX",  "PRLD",  "TPST",
-      "IMAB",  "ARDX",  "BMEA",  "IMTX",  "SANA",
-      "RCKT",  "RIGL",  "AGEN",  "MGNX",  "DVAX",
-      "CALT",  "FOLD",  "FUSN",  "AKBA",  "ANAB",
-      "RLAY",  "IMVT",  "VERA",  "ALEC",  "PRAX",
-      "KROS",  "NUVL",  "CRDF",  "HOOK",  "PMVP",
-      "GOSS",  "ARQT",  "ADAP",  "FLGT",  "BTAI",
-      "CRVS",  "ONCO"
-    ]
+    "tickers": []
   },
-
   "gene_and_cell_therapy": {
     "description": "CRISPR, gene editing, cell therapy — next frontier of medicine, 5-10y horizon",
-    "tickers": [
-      "BEAM",  "NTLA",  "VERV",  "ZYME",  "KYMR",
-      "DAWN",  "ACRS",  "DNLI",  "PTGX",  "ARCT",
-      "RGNX",  "QURE",  "ALLO",  "ABCL",  "PRME"
-    ]
+    "tickers": []
   },
-
   "fintech_insurtech_neobanking": {
     "description": "Next-gen financial services, embedded finance, digital insurance — disrupting incumbents",
-    "tickers": [
-      "DAVE",  "OPEN",  "LMND",  "RELY",  "LPRO",
-      "RPAY",  "NRDS",  "UPST",  "HIPPO", "ATLC",
-      "IIIV",  "MGNI",  "SOFI",  "LC",    "ATER",
-      "TREE",  "ENFN"
-    ]
+    "tickers": []
   },
-
   "critical_minerals_battery": {
     "description": "Lithium, cobalt, rare earths, copper — EV and grid storage supply chain",
-    "tickers": [
-      "LAC",   "PMET",  "SLI",   "PLL",   "MP",
-      "SGML",  "USAS",  "NOVL",  "ABAT",  "NXE",
-      "CBAT",  "FREY",  "PPTA",  "USAU"
-    ]
+    "tickers": []
   },
-
   "agri_food_biotech": {
     "description": "AgriTech, alternative proteins, food innovation, health & wellness brands",
-    "tickers": [
-      "AGFY",  "GRWG",  "HYFM",  "TTCF",  "BYND",
-      "OATS",  "VVPR",  "HIMS",  "SMPL",  "VITL",
-      "BRCC",  "FRSH",  "HNST",  "AVO"
-    ]
+    "tickers": []
   },
-
   "cybersecurity_privacy": {
     "description": "Smaller cybersecurity players — infrastructure digitisation + AI attack surface expansion",
-    "tickers": [
-      "VRNT",  "NTCT",  "RDWR",  "ACMR",  "MAPS",
-      "FSLY",  "INTZ",  "ZI",    "BCOV",  "STNE",
-      "LSPD",  "CISO"
-    ]
+    "tickers": []
   },
-
   "nuclear_and_uranium": {
     "description": "Small modular reactors, uranium mining, nuclear fuel — baseload solution for AI datacentre power demand",
-    "tickers": [
-      "SMR",   "OKLO",  "UEC",   "URG",   "DNN",
-      "LTBR",  "UUUU",  "NNE",   "LEU"
-    ]
+    "tickers": []
   },
-
   "digital_health_mental_health": {
     "description": "Telehealth, mental health platforms, digital therapeutics, AI-driven drug discovery — post-COVID structural shift",
-    "tickers": [
-      "TALK",  "LFST",  "TDOC",  "AMWL",  "ACCD",
-      "CLOV",  "PHR",   "GDRX",  "ATAI",  "MNMD",
-      "MDXG",  "CERT"
-    ]
+    "tickers": []
   },
-
   "water_and_climate_tech": {
     "description": "Water scarcity solutions, climate adaptation infrastructure, environmental services — 2B people face water stress by 2050",
-    "tickers": [
-      "CDZI",  "ERII",  "NWPX",  "CWCO",  "ARTNA",
-      "YORW",  "MSEX",  "GWRS"
-    ]
+    "tickers": []
   },
-
   "blockchain_digital_assets": {
     "description": "Bitcoin miners, blockchain infrastructure — high-beta macro plays on digital asset adoption",
-    "tickers": [
-      "MARA",  "RIOT",  "HUT",   "CLSK",  "BTBT",
-      "CIFR"
-    ]
+    "tickers": []
+  },
+  "auto_screened": {
+    "description": "Auto-screened each quarter from the Nasdaq Trader symbol directory: price < $12, market cap $30M-$2B, volume > 50,000/day, revenue > 0, cash runway > 12 months. Not theme-classified — the curated buckets above are hand-picked.",
+    "tickers": []
   }
 }
