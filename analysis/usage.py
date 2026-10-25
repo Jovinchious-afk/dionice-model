@@ -13,11 +13,19 @@ from datetime import datetime, timezone
 TABLE = "llm_usage"
 
 PRICES: dict[str, tuple[float, float]] = {
+    # Haiku 5.5's rate for prompts up to 100K tokens; ours are ~15K (above 100K: 0.50 / 2.50)
+    "claude-haiku-5-5": (0.10, 0.50),
     "claude-haiku-4-5": (1.0, 5.0),
     "claude-haiku-4-5-20251001": (1.0, 5.0),
+    "claude-sonnet-5-5": (2.0, 10.0),
     "claude-sonnet-5": (2.0, 10.0),
+    "claude-opus-5-5": (4.0, 20.0),
     "claude-opus-5": (5.0, 25.0),
     "claude-opus-4-8": (5.0, 25.0),
+}
+# Cache reads are 0.1x the input price except where listed (USD per million tokens)
+CACHE_READ_PRICES: dict[str, float] = {
+    "claude-opus-5-5": 0.20,
 }
 UNKNOWN_MODEL_PRICE = (5.0, 25.0)  # errs on the expensive side
 
@@ -42,7 +50,7 @@ def usage_cost(model: str, usage, batch: bool = False) -> float:
     cost = (
         _get(usage, "input_tokens") * price_in
         + _get(usage, "output_tokens") * price_out
-        + cache_read * price_in * 0.1
+        + cache_read * CACHE_READ_PRICES.get(model, price_in * 0.1)
         + write_5m * price_in * 1.25
         + write_1h * price_in * 2.0
     ) / 1_000_000

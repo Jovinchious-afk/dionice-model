@@ -38,10 +38,13 @@ from analysis.prices import BENCHMARK, PriceBook, parse_buy_zone
 from analysis.supabase_client import get_supabase
 from analysis.usage import UsageTracker
 
-MODEL = "claude-haiku-4-5-20251001"
+# Claude Haiku 5.5 thinks by default and thinking counts toward max_tokens, so the
+# two-sentence retrospective gets low effort and room for it
+MODEL = "claude-haiku-5-5"
 CHECKPOINTS = [(30, "30d"), (90, "90d"), (180, "180d")]
 BEARISH_ACTIONS = {"SELL", "REDUCE"}
 BUY_ZONE_ACTIONS = {"BUY_BELOW", "ADD_ON_DIP"}
+WATCHLIST_ZONE_ACTIONS = BUY_ZONE_ACTIONS | {"WATCHLIST"}
 NEUTRAL_ACTIONS = {"WATCHLIST", "WAIT", "NO_ACTION", "NO_TRADE"}
 BUY_ZONE_MAX_AGE_DAYS = 180  # only applies to `decisions` — watchlist is bounded by status=ACTIVE instead
 SCORING_VERSION = 2
@@ -167,7 +170,8 @@ i samokritičan ako je ishod pogrešan. Bez uvoda, samo analiza."""
 
         response = client.messages.create(
             model=MODEL,
-            max_tokens=300,
+            max_tokens=4000,
+            output_config={"effort": "low"},
             messages=[{"role": "user", "content": prompt}],
         )
         if usage is not None:
@@ -226,8 +230,9 @@ def update_decision_buy_zones(client, decisions: list[dict], now: datetime, book
 
 
 def update_watchlist_buy_zones(client, rows: list[dict], book: PriceBook, dry_run: bool) -> None:
+    """WATCHLIST zones are tracked too: a reached zone sends the idea to the Thursday revisit."""
     for row in rows:
-        if row.get("action") not in BUY_ZONE_ACTIONS or row.get("buy_zone_reached_at"):
+        if row.get("action") not in WATCHLIST_ZONE_ACTIONS or row.get("buy_zone_reached_at"):
             continue
         suggested_at = parse_ts(row.get("suggested_at"))
         if not suggested_at:

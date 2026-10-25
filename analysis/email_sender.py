@@ -213,8 +213,18 @@ def _build_stock_block(rec: dict) -> str:
             "<p style='background:#eaf7ea;border-left:4px solid #1a7a1a;padding:8px 12px;"
             f"border-radius:0 4px 4px 0;font-size:13px;margin:8px 0;'>🎯 {rec['entry_plan_note']}</p>"
         )
+    if rec.get("zone_drift_note"):
+        guard_html += (
+            "<p style='background:#fff3e0;border-left:4px solid #e67e00;padding:8px 12px;"
+            f"border-radius:0 4px 4px 0;font-size:13px;margin:8px 0;'>⚠️ {rec['zone_drift_note']}</p>"
+        )
     if rec.get("second_pass_note"):
         guard_html += f"<p style='font-size:12px;color:#555;margin:6px 0;'>🔎 {rec['second_pass_note']}</p>"
+    revisit_html = (
+        "<p style='background:#f3f0ff;border-left:4px solid #5b4bb7;padding:8px 12px;border-radius:0 4px 4px 0;"
+        f"font-size:13px;margin:8px 0;'>🔁 {rec['revisit_line']}</p>"
+        if rec.get("revisit_line") else ""
+    )
 
     # investor_view / counter_argument are deliberately not rendered: the model still writes them
     # (and they are stored in analysis_log), but they made the newsletter long enough for Gmail to clip it
@@ -249,6 +259,7 @@ def _build_stock_block(rec: dict) -> str:
     <strong>Veličina pozicije:</strong> {position_size} &nbsp;|&nbsp;
     <strong>Pouzdanost:</strong> {confidence}/10
   </p>
+  {revisit_html}
   {hype_note_html}
   {guard_html}
   <p style='margin:10px 0 4px;font-size:14px;'><strong>Teza:</strong> {thesis}</p>
@@ -265,6 +276,82 @@ def _build_stock_block(rec: dict) -> str:
     {_build_evidence_table(ev)}
   </details>
 </div>"""
+
+
+def _build_gem_block(rec: dict) -> str:
+    """
+    A short hidden-gem card, whatever the action: gems are shown at any confidence,
+    but as WAIT they used to collapse into a single ticker on the waiting line.
+    """
+    action = rec.get("action", "NO_ACTION")
+    flags = rec.get("red_flags") or []
+    flags_html = "".join(f"<li style='font-size:12px;color:#b30000;margin:1px 0;'>{f}</li>" for f in flags[:2])
+    zone_bits = []
+    if _has_text(rec.get("buy_zone")):
+        zone_bits.append(f"<strong>Zona:</strong> {rec.get('buy_zone')}")
+    if _has_text(rec.get("target_price")):
+        zone_bits.append(f"<strong>Cilj:</strong> {rec.get('target_price')}")
+    zone_bits.append("<strong>Pozicija:</strong> najviše 1-2% kapitala")
+    return f"""
+<div style='border:1px solid #6a0dad;border-radius:8px;padding:12px 14px;margin:10px 0;background:#fdf6ff;'>
+  <div style='margin-bottom:6px;'>
+    <span style='background:{_action_color(action)};color:white;padding:2px 8px;border-radius:4px;font-weight:700;font-size:12px;'>{_action_label(action)}</span>
+    <span style='font-size:17px;font-weight:700;margin-left:6px;'>{rec.get('ticker', '')}</span>
+    <span style='color:#666;font-size:13px;'>{rec.get('company_name', '')}</span>
+    <span style='font-size:12px;color:#6a0dad;margin-left:6px;'>💎 {rec.get('confidence', 'N/A')}/10</span>
+  </div>
+  <p style='margin:4px 0;font-size:13px;'><strong>Čime se bavi:</strong> {rec.get('business_explanation', '')}</p>
+  <p style='margin:4px 0;font-size:13px;'><strong>Teza:</strong> {rec.get('investment_thesis', '')}</p>
+  {f"<ul style='margin:4px 0;padding-left:18px;'>{flags_html}</ul>" if flags_html else ""}
+  <p style='margin:4px 0;font-size:12px;color:#555;'>{' &nbsp;|&nbsp; '.join(zone_bits)}</p>
+</div>"""
+
+
+def _build_revisit_card(rec: dict) -> str:
+    """
+    A re-confirmed idea that is not a buy right now (WATCHLIST/WAIT at 6+): first call
+    → today, what changed and the thesis. Full blocks for all of them made the first
+    test email 118 KB, past the ~102 KB at which Gmail clips a message.
+    """
+    action = rec.get("action", "NO_ACTION")
+    zone_bits = [f"<strong>{label}:</strong> {rec.get(key)}" for label, key in (("Zona", "buy_zone"), ("Cilj", "target_price"))
+                 if _has_text(rec.get(key))]
+    drift = (f"<p style='margin:4px 0;font-size:12px;color:#8a4b00;'>⚠️ {rec['zone_drift_note']}</p>"
+             if rec.get("zone_drift_note") else "")
+    return f"""
+<div style='border:1px solid #c9c1f0;border-radius:8px;padding:12px 14px;margin:10px 0;background:#faf9ff;'>
+  <div style='margin-bottom:6px;'>
+    <span style='background:{_action_color(action)};color:white;padding:2px 8px;border-radius:4px;font-weight:700;font-size:12px;'>{_action_label(action)}</span>
+    <span style='font-size:17px;font-weight:700;margin-left:6px;'>{rec.get('ticker', '')}</span>
+    <span style='color:#666;font-size:13px;'>{rec.get('company_name', '')}</span>
+    <span style='font-size:12px;color:#5b4bb7;margin-left:6px;'>{rec.get('confidence', 'N/A')}/10</span>
+  </div>
+  <p style='margin:4px 0;font-size:12px;color:#4a3f8f;'>🔁 {rec.get('revisit_line', '')}</p>
+  {drift}
+  <p style='margin:4px 0;font-size:13px;'><strong>Što se promijenilo:</strong> {rec.get('change_vs_last', '')}</p>
+  <p style='margin:4px 0;font-size:13px;'><strong>Teza:</strong> {rec.get('investment_thesis', '')}</p>
+  {f"<p style='margin:4px 0;font-size:12px;color:#555;'>{' &nbsp;|&nbsp; '.join(zone_bits)}</p>" if zone_bits else ""}
+</div>"""
+
+
+def _ticker_list(recs: list[dict], with_zone: bool = True) -> str:
+    items = []
+    for r in recs:
+        if r.get("excluded_reason"):
+            items.append(f"{r.get('ticker')} (ispala iz analize: {r['excluded_reason']})")
+            continue
+        detail = [f"{r.get('confidence')}/10"]
+        if with_zone and _has_text(r.get("buy_zone")):
+            detail.append(str(r.get("buy_zone")))
+        items.append(f"{r.get('ticker')} ({', '.join(detail)})")
+    return ", ".join(items)
+
+
+# Full analysis blocks: positions, buys and sells always; WATCHLIST only from this
+# confidence (lower ones go on one line — the 4-5 group has not beaten the index)
+FULL_BLOCK_ACTIONS = {"BUY_BELOW", "ADD_ON_DIP", "HOLD", "SELL", "REDUCE"}
+FULL_BLOCK_WATCHLIST_CONFIDENCE = 6
+MAX_GEM_BLOCKS = 3
 
 
 def _weight_cell(position: dict, cap: float | None) -> str:
@@ -284,6 +371,10 @@ def build_html_email(
     email_type: str = "WEEKLY",
     cash_line: str | None = None,
     concentration_cap: float | None = None,
+    revisits_below: list[dict] | None = None,
+    revisit_min_confidence: int = 6,
+    revisit_days: int = 60,
+    health_line: str | None = None,
 ) -> str:
     date_str = summary.get("date", datetime.now().strftime("%Y-%m-%d"))
     market_comment = summary.get("overall_market_comment", "")
@@ -346,16 +437,52 @@ def build_html_email(
 {cap_note}
 {cash_html}"""
 
-    # Stock recommendation blocks
+    # Thursday revisits: ideas of the last weeks analysed again, in their own section.
+    # Buys get the full block, re-confirmed ideas that wait for their zone a short card.
+    revisit_recs = sorted((r for r in recommendations if r.get("revisit")),
+                          key=lambda r: (r.get("action") not in FULL_BLOCK_ACTIONS, -(r.get("confidence") or 0)))
+    revisit_html = ""
+    if revisit_recs or revisits_below:
+        revisit_html = (
+            "<h3 style='margin:20px 0 6px;border-bottom:2px solid #e3ddff;padding-bottom:4px;'>"
+            f"🔁 Ponovna provjera — ideje iz zadnjih {revisit_days} dana</h3>"
+            "<p style='font-size:12px;color:#555;margin:4px 0 8px;'>BUY/ADD preporuke i ideje kojima je cijena dosegnula "
+            f"zonu, ponovno analizirane jačim modelom. Puna analiza od pouzdanosti {revisit_min_confidence}/10.</p>"
+        )
+        revisit_html += "".join(_build_stock_block(r) if r.get("action") in FULL_BLOCK_ACTIONS else _build_revisit_card(r)
+                                for r in revisit_recs)
+        if revisits_below:
+            revisit_html += (
+                f"<p style='color:#555;font-size:13px;margin:8px 0;'><strong>Ispod {revisit_min_confidence}/10 "
+                f"(ideja trenutno ne vrijedi kupnje):</strong> {_ticker_list(revisits_below)}</p>"
+            )
+
+    # Hidden gems: a short card each, whatever the action, at most MAX_GEM_BLOCKS
+    gem_recs = sorted((r for r in recommendations if r.get("is_hidden_gem") and not r.get("revisit")),
+                      key=lambda r: -(r.get("confidence") or 0))
+    gem_html = ""
+    if gem_recs:
+        gem_html = ("<h3 style='margin:20px 0 6px;border-bottom:2px solid #ead6f7;padding-bottom:4px;'>"
+                    "💎 Hidden gems — horizont 5-10 godina, visok rizik</h3>")
+        gem_html += "".join(_build_gem_block(r) for r in gem_recs[:MAX_GEM_BLOCKS])
+        if gem_recs[MAX_GEM_BLOCKS:]:
+            gem_html += (f"<p style='color:#555;font-size:12px;margin:6px 0;'><strong>Ostali gemovi:</strong> "
+                         f"{_ticker_list(gem_recs[MAX_GEM_BLOCKS:], with_zone=False)}</p>")
+
+    # Everything else: full blocks for what can be acted on, one line for the rest
     rec_blocks = ""
-    if recommendations:
-        actionable = [r for r in recommendations if r.get("action") not in ("NO_ACTION", "WAIT")]
-        waiting = [r for r in recommendations if r.get("action") == "WAIT"]
-        if actionable:
-            rec_blocks += "".join(_build_stock_block(r) for r in actionable)
-        if waiting:
-            wait_list = ", ".join(f"{r.get('ticker')} ({r.get('buy_zone','?')})" for r in waiting)
-            rec_blocks += f"<p style='color:#555;font-size:13px;margin:8px 0;'><strong>Čekanje bolje cijene:</strong> {wait_list}</p>"
+    others = [r for r in recommendations if not r.get("revisit") and not r.get("is_hidden_gem")]
+    full = [r for r in others if r.get("action") in FULL_BLOCK_ACTIONS
+            or (r.get("action") == "WATCHLIST" and (r.get("confidence") or 0) >= FULL_BLOCK_WATCHLIST_CONFIDENCE)]
+    watching = [r for r in others if r.get("action") == "WATCHLIST" and r not in full]
+    waiting = [r for r in others if r.get("action") == "WAIT"]
+    rec_blocks += "".join(_build_stock_block(r) for r in full)
+    if watching:
+        rec_blocks += (f"<p style='color:#555;font-size:13px;margin:8px 0;'><strong>Prati zonu (sustav javlja kad je "
+                       f"dosegnuta):</strong> {_ticker_list(watching)}</p>")
+    if waiting:
+        rec_blocks += (f"<p style='color:#555;font-size:13px;margin:8px 0;'><strong>Čekanje (bez zone ili prije "
+                       f"događaja):</strong> {_ticker_list(waiting)}</p>")
 
     no_trade_html = ""
     if no_trade:
@@ -388,12 +515,15 @@ def build_html_email(
   {f"<p style='font-size:13px;color:#555;margin:8px 0;'><strong>Napomena o portfelju:</strong> {portfolio_note}</p>" if portfolio_note else ""}
   <p style='font-size:13px;color:#555;margin:8px 0;'><strong>Tržište:</strong> {market_comment}</p>
 
+  {revisit_html}
   <h3 style='margin:20px 0 8px;border-bottom:2px solid #eee;padding-bottom:4px;'>Preporuke ovaj tjedan</h3>
   {rec_blocks or "<p style='color:#888;'>Nema akcija ovaj tjedan.</p>"}
+  {gem_html}
   {no_trade_html}
   {watchlist_html}
 
   <hr style='margin:24px 0;border:none;border-top:1px solid #eee;'>
+  {f"<p style='font-size:11px;color:#888;margin:4px 0 10px;'>{html.escape(health_line)}</p>" if health_line else ""}
   <p style='font-size:11px;color:#999;'>
     Ovo je AI-generirana analiza isključivo u edukativne svrhe. Nije financijski savjet.
     Uvijek provedi vlastito istraživanje prije investiranja. Samo Revolut Basic platforma.

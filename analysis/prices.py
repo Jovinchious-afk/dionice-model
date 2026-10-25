@@ -26,6 +26,27 @@ def parse_buy_zone(buy_zone_text: str | None) -> float | None:
         return None
 
 
+def latest_closes(tickers: list[str]) -> dict[str, float]:
+    """Last daily close per ticker from one bulk download (5 days, so a holiday still has one)."""
+    tickers = sorted({t for t in tickers if t})
+    if not tickers:
+        return {}
+    try:
+        df = yf.download(tickers, period="5d", progress=False, threads=True, auto_adjust=True, group_by="ticker")
+    except Exception as exc:
+        print(f"[prices] Bulk price download failed: {exc}")
+        return {}
+    out: dict[str, float] = {}
+    for ticker in tickers:
+        try:
+            series = df[ticker]["Close"].dropna() if len(tickers) > 1 else df["Close"].dropna()
+        except Exception:
+            continue
+        if len(series):
+            out[ticker] = float(series.iloc[-1])
+    return out
+
+
 class PriceBook:
     def __init__(self):
         self._closes: dict[str, pd.Series] = {}

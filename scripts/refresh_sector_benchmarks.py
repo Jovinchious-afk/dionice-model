@@ -8,6 +8,10 @@ software company look expensive and every bank cheap.
 
 Runs after refresh_universe.py in the quarterly refresh workflow (the diff is
 committed, so each quarter's benchmarks stay auditable in git).
+
+A sector or industry the new run could not price keeps last quarter's medians
+(marked carried_over_from): on 2026-10-01 Yahoo throttled the first 53 tickers
+and the whole Communication Services sector silently fell back to a P/E of 20.
 Usage: python scripts/refresh_sector_benchmarks.py [--limit N]
 """
 
@@ -30,6 +34,8 @@ OUT_PATH = DATA_DIR / "sector_benchmarks.json"
 MIN_PEERS = 5
 PE_RANGE = (0.0, 200.0)  # negative and absurd multiples say nothing about peers
 DELAY = 0.3
+THROTTLE_STREAK = 10     # this many unanswered tickers in a row means Yahoo is throttling
+THROTTLE_PAUSE_S = 60
 
 
 def universe_tickers() -> list[str]:
@@ -40,6 +46,7 @@ def universe_tickers() -> list[str]:
 
 def fetch_rows(tickers: list[str]) -> list[dict]:
     rows = []
+    streak = 0
     for i, ticker in enumerate(tickers, 1):
         for attempt in range(2):
             try:
@@ -58,10 +65,35 @@ def fetch_rows(tickers: list[str]) -> list[dict]:
                 "pe": info.get("trailingPE"),
                 "forward_pe": info.get("forwardPE"),
             })
+            streak = 0
+        else:
+            streak += 1
+            if streak >= THROTTLE_STREAK:
+                print(f"[benchmarks] {streak} tickers in a row unanswered — pausing {THROTTLE_PAUSE_S}s")
+                time.sleep(THROTTLE_PAUSE_S)
+                streak = 0
         if i % 50 == 0:
             print(f"[benchmarks] {i}/{len(tickers)} fetched")
         time.sleep(DELAY)
     return rows
+
+
+def carry_over_missing(new: dict, previous: dict) -> list[str]:
+    """
+    Copies last quarter's entry for every sector or industry the new run is missing,
+    marked with the date it was measured, for one quarter only: an entry that was
+    already carried over is dropped, so a group that left the universe does not
+    live on. Returns the carried-over names.
+    """
+    since = (previous.get("_meta") or {}).get("refreshed_at") or "previous"
+    carried = []
+    for level in ("sectors", "industries"):
+        for name, entry in (previous.get(level) or {}).items():
+            if name not in new.setdefault(level, {}) and not entry.get("carried_over_from"):
+                new[level][name] = {**entry, "carried_over_from": since}
+                carried.append(name)
+        new[level] = dict(sorted(new[level].items()))
+    return carried
 
 
 def _median(values: list) -> float | None:
@@ -108,6 +140,14 @@ def main(limit: int | None = None):
         sys.exit(1)
 
     result = build_benchmarks(rows)
+    try:
+        previous = json.loads(OUT_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        previous = {}
+    carried = carry_over_missing(result, previous)
+    if carried:
+        print(f"::warning::benchmarks kept last quarter's medians for {len(carried)} groups the run could not "
+              f"price: {', '.join(carried[:12])}{' …' if len(carried) > 12 else ''}")
     result = {
         "_meta": {
             "description": "Median trailing and forward P/E per yfinance sector and industry across the stock universe; used by analysis/scorer.py",

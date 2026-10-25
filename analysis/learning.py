@@ -12,6 +12,12 @@ Two datasets:
   - analysis_log features (since 2026-09-29): every scored stock, including the
     ones filtered out before the AI, with the ten scorer criteria — the data for
     judging the scorer weights and the filters themselves
+
+From 2026-10-25 analysis_log also carries the Thursday revisits (does a re-confirmed
+idea beat a first call?), what the model did when the price reached its previous
+zone (kept it or lowered it), and an A/B sample: a few stocks per run analysed by
+the review model as well, never published, so both models' calls on the same stock
+on the same day can be compared. A/B rows are kept out of every other table.
 """
 
 import math
@@ -21,6 +27,7 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
+from analysis.analysis_history import is_ab_shadow
 from analysis.prices import BENCHMARK, PriceBook, parse_buy_zone
 
 HORIZONS = (30, 90, 180)
@@ -160,8 +167,9 @@ def decision_observations(decisions: list[dict], watchlist_rows: list[dict], boo
 
 
 def analysis_observations(analysis_rows: list[dict], book: PriceBook, now: datetime) -> list[dict]:
-    """analysis_log rows that carry a features record (logged from 2026-09-29 on)."""
-    rows = [r for r in analysis_rows if isinstance((r.get("snapshot") or {}).get("features"), dict)]
+    """analysis_log rows that carry a features record (logged from 2026-09-29 on), A/B rows excluded."""
+    rows = [r for r in analysis_rows
+            if isinstance((r.get("snapshot") or {}).get("features"), dict) and not is_ab_shadow(r)]
     rows = collapse_repeats(rows, "analyzed_at", "action")
     preload(book, [(r.get("symbol"), parse_ts(r.get("analyzed_at"))) for r in rows])
 
@@ -179,6 +187,9 @@ def analysis_observations(analysis_rows: list[dict], book: PriceBook, now: datet
             "model": r.get("model"),
             "shadow": r.get("action") in SHADOW_ACTIONS,
             "features": features,
+            "revisit": features.get("revisit_trigger"),
+            "zone_drift": bool(features.get("zone_drift")),
+            "ref_zone_reached": bool(features.get("ref_zone_reached")),
         }
         for h in HORIZONS:
             end = start + timedelta(days=h)
@@ -236,6 +247,69 @@ def hype_bucket(value) -> str | None:
     if h is None:
         return None
     return "1-3" if h <= 3 else "4-6" if h <= 6 else "7+"
+
+
+def revisit_bucket(o: dict) -> str | None:
+    """Thursday revisits vs every other AI call, split at the confidence that publishes a revisit."""
+    c = _num(o.get("confidence"))
+    if o.get("shadow") or not c:
+        return None
+    kind = "ponovna provjera" if o.get("revisit") else "redovna analiza"
+    return f"{kind} · conf {'6+' if c >= 6 else '≤5'}"
+
+
+def zone_decision_bucket(o: dict) -> str | None:
+    """When the price reached the previous zone: did the model keep the zone or lower it?"""
+    if o.get("zone_drift"):
+        return "zona spuštena"
+    if o.get("ref_zone_reached"):
+        return "zona zadržana"
+    return None
+
+
+def ab_comparison(analysis_rows: list[dict], book: PriceBook, now: datetime, horizon: int = 30) -> dict:
+    """
+    The routine model and the review model on the same stock on the same day (the A/B
+    sample): how often they agree, and whose confidence ranks the later excess return
+    better. Pairs are matched by symbol and date.
+    """
+    main_by_key = {
+        (r.get("symbol"), str(r.get("analyzed_at") or "")[:10]): r
+        for r in analysis_rows
+        if r.get("model") and r.get("action") not in SHADOW_ACTIONS and not is_ab_shadow(r)
+    }
+    pairs = [(main_by_key[key], r) for r in analysis_rows if is_ab_shadow(r) and r.get("model")
+             for key in [(r.get("symbol"), str(r.get("analyzed_at") or "")[:10])] if key in main_by_key]
+    if not pairs:
+        return {"pairs": 0}
+    preload(book, [(m.get("symbol"), parse_ts(m.get("analyzed_at"))) for m, _ in pairs])
+
+    measured = []
+    for main, shadow in pairs:
+        start = parse_ts(main.get("analyzed_at"))
+        if not start or start + timedelta(days=horizon) > now:
+            continue
+        fr = forward_excess(book, main.get("symbol"), start, start + timedelta(days=horizon))
+        if fr:
+            measured.append((main, shadow, fr["excess"]))
+
+    out = {
+        "pairs": len(pairs),
+        "measured": len(measured),
+        "horizon": horizon,
+        "agree_pct": round(sum(1 for m, s in pairs if m.get("action") == s.get("action")) / len(pairs) * 100),
+        "models": {},
+    }
+    for role, idx in (("main", 0), ("shadow", 1)):
+        rows = [(p[idx], p[2]) for p in measured]
+        confs = [_num(p[idx].get("confidence")) for p in pairs]
+        out["models"][role] = {
+            "model": pairs[0][idx].get("model"),
+            "avg_conf": round(statistics.fmean(c for c in confs if c is not None), 2) if any(c is not None for c in confs) else None,
+            "rho": spearman([_num(r.get("confidence")) for r, _ in rows], [x for _, x in rows]),
+            "conf6": summarize([x for r, x in rows if (_num(r.get("confidence")) or 0) >= 6]),
+        }
+    return out
 
 
 def bucket_table(obs: list[dict], key_fn, horizon: int) -> list[dict]:
@@ -441,6 +515,9 @@ def build_stats(decisions: list[dict], watchlist_rows: list[dict], analysis_rows
         "analysis_shadow_rows": sum(1 for o in aobs if o["shadow"]),
         "by_hype": {30: bucket_table(aobs, lambda o: hype_bucket(o["features"].get("hype")), 30)},
         "ai_vs_filtered": {30: bucket_table(aobs, lambda o: "filtrirano (bez AI)" if o["shadow"] else "AI analiza", 30)},
+        "by_revisit": {30: bucket_table(aobs, revisit_bucket, 30)},
+        "by_zone_decision": {30: bucket_table(aobs, zone_decision_bucket, 30)},
+        "ab_models": ab_comparison(analysis_rows, book, now),
         "criteria_ic": {h: criteria_ic(aobs, h) for h in (30, 90)},
         "parse_failures": sum(1 for r in analysis_rows if r.get("model") and (r.get("confidence") in (0, None))),
         "analyses_logged": sum(1 for r in analysis_rows if r.get("model")),
@@ -528,6 +605,22 @@ def stats_markdown(stats: dict) -> str:
     lines += _table("Hype razina — 30 dana", stats["by_hype"].get(30) or stats["by_hype"].get("30") or [])
     lines += _table("AI analiza vs filtrirano prije AI-a — 30 dana",
                     stats["ai_vs_filtered"].get(30) or stats["ai_vs_filtered"].get("30") or [])
+    for title, key in (("Ponovna provjera četvrtkom vs redovne analize — 30 dana", "by_revisit"),
+                       ("Kad je cijena dosegnula prethodnu zonu: zona zadržana ili spuštena — 30 dana", "by_zone_decision")):
+        table = stats.get(key) or {}
+        lines += _table(title, table.get(30) or table.get("30") or [])
+    ab = stats.get("ab_models") or {}
+    if ab.get("pairs"):
+        main, shadow = ab["models"]["main"], ab["models"]["shadow"]
+        lines.append(f"**A/B: {main['model']} vs {shadow['model']} na istim dionicama istog dana:** {ab['pairs']} parova, "
+                     f"ista akcija u {ab['agree_pct']}% slučajeva, {ab['measured']} izmjereno nakon {ab['horizon']} dana.")
+        for model in (main, shadow):
+            rho = f"{model['rho']:+.2f}" if model.get("rho") is not None else "premalo podataka"
+            lines.append(f"- {model['model']}: prosječni confidence {model['avg_conf']}, rang-korelacija confidence ↔ "
+                         f"povrat {rho}; confidence 6+: {_fmt_summary(model['conf6'])}")
+        lines.append("")
+    else:
+        lines += ["**A/B usporedba modela:** još nema parova", ""]
     for h in (30, 90):
         ic = stats["criteria_ic"].get(h) or stats["criteria_ic"].get(str(h)) or []
         usable = [r for r in ic if r.get("rho") is not None]

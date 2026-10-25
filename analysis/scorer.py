@@ -75,6 +75,17 @@ def _benchmarks() -> dict:
         return {}
 
 
+def benchmark_coverage() -> dict:
+    """Sectors and industries the P/E benchmarks cover, and how many are last quarter's carried over."""
+    data = _benchmarks()
+    groups = [*(data.get("sectors") or {}).values(), *(data.get("industries") or {}).values()]
+    return {
+        "sectors": len(data.get("sectors") or {}),
+        "industries": len(data.get("industries") or {}),
+        "carried_over": sum(1 for g in groups if g.get("carried_over_from")),
+    }
+
+
 def peer_pe(fundamentals: dict, forward: bool = False) -> tuple[float, str]:
     """Median (forward) P/E of the stock's industry, else its sector, else 20."""
     key = "forward_pe_median" if forward else "pe_median"

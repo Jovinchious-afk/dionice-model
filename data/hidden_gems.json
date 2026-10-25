@@ -8,69 +8,160 @@
     "removed_bankruptcies": "SPCE, NOVA, ASTR, SPWR, NKLA, GOEV, HYZN, ZEV, SOLO, MTTR, APPH, GTHX, BLUE, LTHM, LIVENT, GATO",
     "removed_misclassified": "STLA (large cap), CPER (ETF), VNET (delisted NASDAQ), BGSF (staffing not space), PIRS (pharma not quantum), TRMR (ad-tech not defense), MBOT (biotech not drones), HPNN (bank not energy), SVMK (went private)",
     "note": "Prices move fast in this segment. A stock listed here may be above $12 today — the runtime check filters it automatically. Conversely, a mainstream stock that crashes below $12 is NOT a gem — only the thesis and sector make it one.",
-    "total": 0,
-    "refreshed_at": "2026-10-01",
-    "auto_screened_count": 0
+    "total": 156,
+    "refreshed_at": "2026-10-25",
+    "auto_screened_count": 80
   },
   "ai_and_data_infrastructure": {
     "description": "AI enablers, niche software, data platforms, edge AI — pre-mainstream recognition phase",
-    "tickers": []
+    "tickers": [
+      "SOUN",
+      "BBAI",
+      "AEYE",
+      "PERI",
+      "HCAT",
+      "CODA",
+      "BTDR",
+      "ABSI",
+      "RXRX"
+    ]
   },
   "quantum_computing": {
     "description": "Quantum hardware and software — 5-10 year commercialisation horizon, binary risk",
-    "tickers": []
+    "tickers": [
+      "QUBT",
+      "SPIR"
+    ]
   },
   "space_and_satellites": {
     "description": "Commercial space, launch services, earth observation, satellite communications",
-    "tickers": []
+    "tickers": [
+      "LUNR",
+      "SATL",
+      "MNTS"
+    ]
   },
   "energy_transition_renewables": {
     "description": "Solar, wind, grid storage, clean energy, sustainable fuels — energy independence thesis",
-    "tickers": []
+    "tickers": [
+      "FCEL",
+      "BLDP",
+      "CLNE",
+      "ARRY",
+      "FLNC",
+      "CSIQ",
+      "HYLN",
+      "GEVO",
+      "OPAL"
+    ]
   },
   "ev_and_next_gen_transport": {
     "description": "Electric vehicles, charging infrastructure, urban air mobility, autonomous systems",
-    "tickers": []
+    "tickers": [
+      "CHPT",
+      "BLNK",
+      "MVST",
+      "AEVA",
+      "WPRT"
+    ]
   },
   "defense_drones_robotics": {
     "description": "Drone manufacturers, defense tech, autonomous systems, military AI — geopolitical spending surge",
-    "tickers": []
+    "tickers": [
+      "RCAT",
+      "UAVS",
+      "MVIS",
+      "INVZ",
+      "LIDR",
+      "INDI",
+      "SLDP",
+      "AISP"
+    ]
   },
   "biotech_genomics": {
     "description": "Drug developers, diagnostics, biomarkers — pipeline-driven binary upside",
-    "tickers": []
+    "tickers": [
+      "EDIT",
+      "SEER",
+      "FATE",
+      "PRLD",
+      "ARDX",
+      "IMTX",
+      "MGNX",
+      "AKBA",
+      "ALEC",
+      "KROS",
+      "CRDF",
+      "GOSS"
+    ]
   },
   "gene_and_cell_therapy": {
     "description": "CRISPR, gene editing, cell therapy — next frontier of medicine, 5-10y horizon",
-    "tickers": []
+    "tickers": [
+      "NTLA",
+      "ACRS",
+      "ARCT",
+      "ALLO",
+      "PRME"
+    ]
   },
   "fintech_insurtech_neobanking": {
     "description": "Next-gen financial services, embedded finance, digital insurance — disrupting incumbents",
-    "tickers": []
+    "tickers": [
+      "OPEN",
+      "RPAY",
+      "NRDS"
+    ]
   },
   "critical_minerals_battery": {
     "description": "Lithium, cobalt, rare earths, copper — EV and grid storage supply chain",
-    "tickers": []
+    "tickers": [
+      "SGML",
+      "USAS",
+      "ABAT",
+      "CBAT"
+    ]
   },
   "agri_food_biotech": {
     "description": "AgriTech, alternative proteins, food innovation, health & wellness brands",
-    "tickers": []
+    "tickers": [
+      "GRWG",
+      "BYND",
+      "SMPL",
+      "BRCC",
+      "HNST",
+      "AVO"
+    ]
   },
   "cybersecurity_privacy": {
     "description": "Smaller cybersecurity players — infrastructure digitisation + AI attack surface expansion",
-    "tickers": []
+    "tickers": [
+      "MAPS",
+      "LSPD"
+    ]
   },
   "nuclear_and_uranium": {
     "description": "Small modular reactors, uranium mining, nuclear fuel — baseload solution for AI datacentre power demand",
-    "tickers": []
+    "tickers": [
+      "URG",
+      "DNN",
+      "UUUU"
+    ]
   },
   "digital_health_mental_health": {
     "description": "Telehealth, mental health platforms, digital therapeutics, AI-driven drug discovery — post-COVID structural shift",
-    "tickers": []
+    "tickers": [
+      "TDOC",
+      "GDRX",
+      "MDXG",
+      "CERT"
+    ]
   },
   "water_and_climate_tech": {
     "description": "Water scarcity solutions, climate adaptation infrastructure, environmental services — 2B people face water stress by 2050",
-    "tickers": []
+    "tickers": [
+      "ERII"
+    ]
   },
   "blockchain_digital_assets": {
     "description": "Bitcoin miners, blockchain infrastructure — high-beta macro plays on digital asset adoption",
@@ -78,6 +169,87 @@
   },
   "auto_screened": {
     "description": "Auto-screened each quarter from the Nasdaq Trader symbol directory: price < $12, market cap $30M-$2B, volume > 50,000/day, revenue > 0, cash runway > 12 months. Not theme-classified — the curated buckets above are hand-picked.",
-    "tickers": []
+    "tickers": [
+      "ABX",
+      "AGBK",
+      "AMRN",
+      "ANTA",
+      "ARCO",
+      "ASM",
+      "AVTX",
+      "BCRX",
+      "BFLY",
+      "BTZ",
+      "CGBD",
+      "CHY",
+      "CMRC",
+      "CRBU",
+      "CRON",
+      "CTKB",
+      "DMRC",
+      "DOMH",
+      "EAD",
+      "EFC",
+      "ENVX",
+      "FMC",
+      "FOA",
+      "FTEK",
+      "GERN",
+      "GMRS",
+      "GROV",
+      "GTE",
+      "IPWR",
+      "JBLU",
+      "KLXE",
+      "KPLT",
+      "LAES",
+      "LIEN",
+      "LUCK",
+      "METC",
+      "MFIC",
+      "MGTX",
+      "MLCO",
+      "MNOV",
+      "MNTN",
+      "MRLN",
+      "MSIF",
+      "MXCT",
+      "NAZ",
+      "NLOP",
+      "NMCO",
+      "NN",
+      "OCGN",
+      "OFIX",
+      "OI",
+      "OIS",
+      "ORC",
+      "OWLT",
+      "OXSQ",
+      "PACK",
+      "PAL",
+      "PAX",
+      "PIM",
+      "PRTH",
+      "PSEC",
+      "RFI",
+      "RILY",
+      "RMIX",
+      "RMNI",
+      "RNAC",
+      "SHMD",
+      "SLMT",
+      "SUJA",
+      "SUNS",
+      "SWMR",
+      "TASK",
+      "TDF",
+      "TTI",
+      "TZOO",
+      "VISN",
+      "VMD",
+      "VVR",
+      "WHF",
+      "XTIA"
+    ]
   }
 }

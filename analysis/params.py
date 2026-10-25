@@ -23,7 +23,14 @@ DEFAULTS: dict = {
     "starter_fraction": 0.5,
     "second_pass_min_confidence": 6,
     "second_pass_max_per_run": 5,
-    "monthly_budget_usd": 4.5,
+    # The investor raised the ceiling on 2026-10-25 ("even $10 a month is fine");
+    # measured spend was about $2.5 in October
+    "monthly_budget_usd": 8.0,
+    "revisit_days": 60,
+    "revisit_max": 20,
+    "revisit_min_confidence": 6,
+    "ab_sample_per_run": 6,
+    "watchlist_max_age_days": 90,
     "scorer_weights": None,  # None = analysis.scorer.WEIGHTS
 }
 
@@ -38,7 +45,12 @@ DESCRIPTIONS: dict[str, str] = {
     "starter_fraction": "Koji dio pozicije se kupuje odmah kad vrijedi pravilo gornjeg reda",
     "second_pass_min_confidence": "BUY kandidati od ovog confidencea idu na drugu provjeru jačim modelom",
     "second_pass_max_per_run": "Najviše toliko drugih provjera po newsletteru",
-    "monthly_budget_usd": "Mjesečni budžet za AI (USD); iznad njega se druga provjera preskače",
+    "monthly_budget_usd": "Mjesečni budžet za AI (USD); iznad njega se druga provjera i A/B uzorak preskaču",
+    "revisit_days": "Četvrtkom se ponovno analiziraju BUY/ADD ideje i dosegnute zone iz zadnjih toliko dana",
+    "revisit_max": "Najviše toliko ponovnih provjera po četvrtku (dosegnute zone imaju prednost)",
+    "revisit_min_confidence": "Ponovno provjerena ideja ulazi u newsletter kao puna analiza od ovog confidencea",
+    "ab_sample_per_run": "Toliko nasumičnih dionica po newsletteru analizira i jači model, samo za usporedbu u izvještaju učenja",
+    "watchlist_max_age_days": "Watchlist ideja starija od ovoga, koju nitko nije ponovno analizirao, ide u EXPIRED",
     "scorer_weights": "Težine kriterija fundamentalnog scorea po kategoriji",
 }
 
@@ -53,6 +65,7 @@ PROPOSABLE: dict[str, dict] = {
     "starter_min_confidence": {"type": int, "min": 6, "max": 10, "step": 1},
     "starter_fraction": {"type": float, "min": 0.25, "max": 0.75, "step": 0.25},
     "second_pass_min_confidence": {"type": int, "min": 5, "max": 9, "step": 1},
+    "revisit_min_confidence": {"type": int, "min": 5, "max": 8, "step": 1},
 }
 
 

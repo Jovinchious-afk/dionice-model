@@ -185,6 +185,11 @@ def select_candidates(
     return main, gems
 
 
+def gem_pool_size() -> int:
+    """Tickers in hidden_gems.json — the newsletter shows it, so an empty pool is noticed the same day."""
+    return len(_load_gems())
+
+
 def get_universe_stats() -> dict[str, Any]:
     """Returns size stats for the loaded universe — useful for debugging."""
     universe = _load_universe()

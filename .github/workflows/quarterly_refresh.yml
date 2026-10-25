@@ -38,16 +38,21 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python scripts/refresh_universe.py
 
-      - name: Refresh hidden gems (Nasdaq directory -> filtered)
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python scripts/refresh_gems.py
-
+      # Benchmarks run before the gem screen: the screen's ~60 bulk downloads are
+      # what got the runner throttled on 2026-10-01, and the benchmarks fetched
+      # right after it lost a whole sector.
       - name: Refresh sector P/E benchmarks (scorer compares P/E with its industry)
         # A Yahoo hiccup keeps last quarter's file and must not block the universe commit
         continue-on-error: true
         run: python scripts/refresh_sector_benchmarks.py
+
+      - name: Refresh hidden gems (Nasdaq directory -> filtered)
+        # A failed screen keeps last quarter's pool (see the ::warning:: in the log)
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/refresh_gems.py
 
       - name: Commit the refreshed pools
         run: |

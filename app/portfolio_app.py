@@ -897,6 +897,24 @@ elif page == "Učenje":
             st.rerun()
     else:
         st.caption("Nema aktivnih lekcija.")
+    with st.expander("✏️ Ručno uredi aktivne lekcije"):
+        st.caption("Lekcija mijenja kako analitičar procjenjuje, ne pravila sustava. Jedna lekcija po retku, s brojkama "
+                   "iz izvještaja. Spremanjem stare lekcije idu u RETIRED, a nove vrijede od idućeg newslettera.")
+        with st.form("lessons_form"):
+            current_text = sorted(active_lessons, key=lambda r: str(r.get("generated_at")),
+                                  reverse=True)[0].get("lessons_text", "") if active_lessons else ""
+            new_text = st.text_area("Lekcije", value=current_text, height=280)
+            if st.form_submit_button("Spremi kao aktivne lekcije"):
+                if not new_text.strip():
+                    st.error("Lekcije ne mogu biti prazne — za uklanjanje koristi gumb 'Ukloni aktivne lekcije'.")
+                else:
+                    for row in active_lessons:
+                        db.table("model_lessons").update({"status": "RETIRED", "decided_at": now_iso}).eq("id", row["id"]).execute()
+                    db.table("model_lessons").insert({"generated_at": now_iso, "period_label": "ručna izmjena",
+                                                      "lessons_text": new_text.strip(), "status": "ACTIVE",
+                                                      "decided_at": now_iso}).execute()
+                    st.success("Spremljeno — vrijedi od idućeg newslettera.")
+                    st.rerun()
     for row in proposed_lessons:
         st.markdown(f"**Prijedlog ({row.get('period_label', '')}):**\n\n{row.get('lessons_text', '')}")
         c1, c2 = st.columns(2)
@@ -936,11 +954,12 @@ elif page == "Učenje":
                 db.table("model_params").update({"status": "REJECTED", "decided_at": now_iso}).eq("id", row["id"]).execute()
                 st.rerun()
 
+    # Strings, so integer parameters are not shown as 5.0 next to the float ones
     overview = [
-        {"Parametar": key, "Sada": params_now.get(key), "Zadano": default, "Opis": DESCRIPTIONS.get(key, "")}
+        {"Parametar": key, "Sada": str(params_now.get(key)), "Zadano": str(default), "Opis": DESCRIPTIONS.get(key, "")}
         for key, default in DEFAULTS.items() if key != "scorer_weights"
     ]
-    st.dataframe(pd.DataFrame(overview).astype({"Sada": str, "Zadano": str}), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(overview), use_container_width=True, hide_index=True)
     if params_now.get("scorer_weights"):
         st.caption("Težine scorea: aktivna je odobrena izmjena (ne zadane vrijednosti).")
 

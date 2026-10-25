@@ -56,13 +56,70 @@ def test_request_params_cache_and_output_config():
     assert "cache_control" not in build_system("PROFIL", "KONTEKST", cache_ttl=None)[-1]
     params = request_params(system, "prompt")
     assert params["output_config"]["format"]["type"] == "json_schema"
-    assert "effort" not in params["output_config"]  # Haiku 4.5 has no effort
-    review = request_params(system, "prompt", model=ai_analyst.REVIEW_MODEL, effort="medium")
-    assert review["output_config"]["effort"] == "medium"
-    assert review["max_tokens"] > params["max_tokens"]
+    # Effort is pinned per model (the cache is keyed on it); thinking needs room in max_tokens
+    assert params["output_config"]["effort"] == ai_analyst.ANALYST_EFFORT
+    review = request_params(system, "prompt", model=ai_analyst.REVIEW_MODEL)
+    assert review["output_config"]["effort"] == ai_analyst.REVIEW_EFFORT
+    assert params["max_tokens"] == review["max_tokens"] >= 16000
+    assert request_params(system, "prompt", model=ai_analyst.REVIEW_MODEL, effort="high")["output_config"]["effort"] == "high"
     # Identical prefix for every stock: only the user message differs
     other = request_params(system, "drugi prompt")
     assert other["system"] == params["system"] and other["output_config"] == params["output_config"]
+
+
+def test_zone_lowered_while_price_sits_at_the_old_zone_is_flagged(fund, params):
+    # CENX on 2026-10-25: zone < $32 from September, price $31.42, new zone < $28
+    at_zone = dict(fund, current_price=31.42)
+    rec = finalize(model_json(buy_zone="< $28.00"), make_ctx(at_zone, params, reference_zone="< $32.00"),
+                   ai_analyst.MODEL)
+    assert rec["zone_drift"]["from"] == 32.0 and rec["zone_drift"]["to"] == 28.0
+    assert "$32.00" in rec["zone_drift_note"] and rec["reference_zone_reached"]
+    # Kept zone, or a price still far above the old zone: nothing to flag
+    kept = finalize(model_json(buy_zone="< $32.00"), make_ctx(at_zone, params, reference_zone="< $32.00"),
+                    ai_analyst.MODEL)
+    assert "zone_drift" not in kept and kept["reference_zone_reached"]
+    above = finalize(model_json(buy_zone="< $28.00"), make_ctx(dict(fund, current_price=40.0), params,
+                                                               reference_zone="< $32.00"), ai_analyst.MODEL)
+    assert "zone_drift" not in above and not above["reference_zone_reached"]
+
+
+def test_review_model_calls_carry_the_refusal_fallback():
+    seen = {}
+
+    class Recorder:
+        def __init__(self, name):
+            self.name = name
+
+        def create(self, **params):
+            seen[self.name] = params
+            return SimpleNamespace(model=params["model"], usage=None)
+
+    client = SimpleNamespace(messages=Recorder("plain"), beta=SimpleNamespace(messages=Recorder("beta")))
+    ai_analyst.call_claude(client, {"model": ai_analyst.REVIEW_MODEL, "messages": []})
+    assert seen["beta"]["fallbacks"] == "default" and seen["beta"]["betas"] == [ai_analyst.FALLBACK_BETA]
+    # Claude Haiku 5.5 has no server-side fallback: plain endpoint, no fallbacks parameter
+    ai_analyst.call_claude(client, {"model": ai_analyst.MODEL, "messages": []})
+    assert "fallbacks" not in seen["plain"]
+
+
+def test_summary_gets_the_business_description_and_runs_on_the_review_model():
+    seen = {}
+
+    class Recorder:
+        def create(self, **params):
+            seen.update(params)
+            payload = {"overall_market_comment": "x", "top_actions": [], "watchlist_this_week": [],
+                       "no_trade_reason": "", "portfolio_note": ""}
+            return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps(payload))],
+                                   stop_reason="end_turn", model=params["model"], usage=None)
+
+    client = SimpleNamespace(messages=Recorder(), beta=SimpleNamespace(messages=Recorder()))
+    rec = {"ticker": "CARG", "company_name": "CarGurus, Inc.", "action": "HOLD", "confidence": 7,
+           "business_explanation": "Online tržište rabljenih automobila."}
+    ai_analyst.generate_weekly_summary(client, [], [rec], "2026-10-25")
+    assert seen["model"] == ai_analyst.REVIEW_MODEL
+    assert "CarGurus, Inc." in seen["messages"][0]["content"]
+    assert "Online tržište rabljenih automobila." in seen["messages"][0]["content"]
 
 
 def test_not_held_stock_cannot_end_up_with_a_sell(fund, params):
@@ -109,6 +166,9 @@ def test_starter_plan_only_for_high_confidence_buys(fund, params):
     assert strong["entry_plan"] == "starter" and "50%" in strong["entry_plan_note"]
     normal = finalize(model_json(confidence=7), make_ctx(fund, params), ai_analyst.MODEL)
     assert "entry_plan" not in normal
+    # Price already inside the zone: buy now, the rest over the following weeks
+    in_zone = finalize(model_json(confidence=8, buy_zone="< $110.00"), make_ctx(fund, params), ai_analyst.MODEL)
+    assert "već u zoni" in in_zone["entry_plan_note"] and "50%" in in_zone["entry_plan_note"]
 
 
 def test_held_stock_actions_are_normalized(fund, params):

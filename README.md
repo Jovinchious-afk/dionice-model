@@ -3,17 +3,19 @@
 AI-powered stock analysis system for a small retail investor using Revolut Basic.
 
 **What it does:**
-- Sends a stock newsletter every **Tuesday and Thursday** (Croatian)
+- Sends a stock newsletter every **Tuesday and Thursday** (Croatian); on Thursdays it also
+  re-checks the last 60 days' buy ideas and every idea whose buy zone the price reached
 - Sends a monthly portfolio review on the **1st of each month**
 - Sends a **quarterly learning report**: how past calls did against the S&P 500, and
   proposed lessons and parameter changes that you approve in the app
 - Tracks your portfolio via a **Streamlit web app**
 - Logs agent recommendations vs your decisions and scores them against the S&P 500
 
-**Cost: ~$3-4/month** (Claude Haiku 4.5 via the Message Batches API for routine analysis,
-Sonnet 5 for second opinions on buy and sell calls, Opus 5 once a quarter). Spend is
-logged per run and shown on the app's "Učenje" page; above the monthly budget the
-second opinions are skipped.
+**Cost: ~$3-5/month** (Claude Haiku 5.5 via the Message Batches API for routine analysis;
+Claude Sonnet 5.5 for second opinions on buy and sell calls, the Thursday revisits, a small
+A/B sample and the newsletter summary; Claude Opus 5.5 once a quarter). Spend is logged per
+run and shown on the app's "Učenje" page; above the monthly budget ($8) the second
+opinions and the A/B sample are skipped.
 
 ---
 
@@ -206,9 +208,16 @@ python scripts/run_quarterly_review.py --dry-run --no-ai  # learning statistics,
 4. **Claude analyzes** all signals (one Message Batch, cached shared prompt, JSON schema) and produces:
    action, buy zone, target, thesis, catalyst, downside scenario; the evidence table comes from the data
 5. **Deterministic rules** run on every answer (hype block, confidence floor, sell guard,
-   30% concentration cap, "part now, rest at the zone" for high-confidence buys)
-6. **Buy candidates get a second opinion** from a stronger model while the monthly budget allows
-7. **Email is sent** with max 4-7 actions; "NO TRADE" is a valid primary output
+   30% concentration cap, "part now, rest at the zone" for high-confidence buys, and a flag
+   when a zone is lowered while the price already sits at the old one)
+6. **Buy candidates and lowered zones get a second opinion** from a stronger model while the
+   monthly budget allows
+7. **Thursdays: revisit.** Every BUY_BELOW/ADD_ON_DIP of the last 60 days and every watchlist
+   idea whose zone was reached is analysed again by the stronger model; from confidence 6
+   it is shown again with "first call → today", below 6 it is named as no longer worth buying
+8. **Email is sent** with max 4-7 actions; "NO TRADE" is a valid primary output. Hidden gems
+   get short cards, and a health line at the bottom shows the gem pool, benchmark coverage
+   and the month's AI spend
 
 **Hype rule:** StockTwits message velocity relative to company size ≥7/10 → no BUY, maximum WATCHLIST  
 **Concentration rule:** no ADD_ON_DIP for a position above 30% of total capital (positions + cash)  
@@ -224,16 +233,21 @@ its features. Once a quarter `run_quarterly_review.py` measures the calls agains
 criteria predicted returns; your real trades vs the same money in SPY). Claude turns the
 tables into a report, lessons and bounded parameter proposals. Nothing changes by itself:
 you approve lessons and parameters on the "Učenje" page, and the next report measures
-results before and after each change.
+results before and after each change. The report also measures the Thursday revisits
+against first calls, what the model did when the price reached its zone (kept it or
+lowered it), and an A/B sample: a few stocks per run analysed by both models, so the
+choice of the routine model rests on data.
 
 ---
 
 ## Email Schedule
 
 - **Tuesday and Thursday, 13:00 UTC** — Weekly newsletter (GitHub starts scheduled jobs late,
-  and the batch adds up to an hour, so it usually arrives in the evening)
+  and the batch adds up to an hour, so it usually arrives in the evening); Thursday's
+  includes the revisit section
 - **1st of each month, 09:00 UTC** — Monthly portfolio review
-- **Wednesday 10:00 UTC** — Background decision scoring vs S&P 500 + buy-zone check (no email)
+- **Wednesday 10:00 UTC** — Background decision scoring vs S&P 500 + buy-zone check for
+  BUY/ADD and WATCHLIST ideas (no email); Thursday's revisit reads what it marked
 - **1st of Jan/Apr/Jul/Oct** — universe + sector benchmark refresh (06:00 UTC), then the
   quarterly learning report (09:00 UTC)
 

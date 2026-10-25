@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import anthropic
 
-from analysis.ai_analyst import REVIEW_MODEL, parse_message
+from analysis.ai_analyst import FALLBACK_BETA, REVIEW_MODEL, parse_message
 from analysis.email_sender import inline_markdown, markdown_to_html, send_email
 from analysis.investor_profile import load_investor_profile
 from analysis.learning import MIN_N_PROPOSAL, build_stats, stats_markdown
@@ -44,8 +44,9 @@ from analysis.scorer import resolve_weights
 from analysis.supabase_client import get_supabase
 from analysis.usage import UsageTracker
 
-SYNTHESIS_MODEL = "claude-opus-5"
-FALLBACK_BETA = "server-side-fallback-2026-07-01"
+SYNTHESIS_MODEL = "claude-opus-5-5"
+# Claude Opus 5.5 defaults to medium effort; the one analysis a quarter is worth high
+SYNTHESIS_EFFORT = "high"
 LOOKBACK_DAYS = 400
 
 SYNTHESIS_SYSTEM = """Ti si kvantitativni analitičar koji jednom po kvartalu pregledava rezultate AI sustava za preporuke dionica jednog malog ulagača iz Hrvatske (Revolut, 300-400 EUR mjesečno, value pristup: dosadne, profitabilne, podcijenjene firme). Pišeš NA HRVATSKOM.
@@ -56,12 +57,14 @@ PRAVILA:
 - Svaki zaključak mora se oslanjati na brojke iz tablica. Navedi n i interval. Ne računaj ništa što nije u tablicama.
 - Ako je n manji od 20 ili interval prelazi nulu, reci jasno da je to naznaka, a ne dokaz.
 - Uzorak pokriva kratko razdoblje i jedan tržišni režim: ono što je radilo u rastućem tržištu ne mora raditi u padajućem. Napomeni to gdje je važno.
-- Lekcije (lessons): 0-6 rečenica, svaka je izravna uputa analitičaru koji piše preporuke (npr. "Kod confidence 4-5 radije WAIT nego WATCHLIST: ta skupina je zaostala za S&P 500 (n=30, -1.7pp)."). Samo lekcije koje podaci podupiru; bez općenitih savjeta. Bolje manje lekcija nego nepouzdane.
+- Lekcije (lessons): 0-6 rečenica, svaka je izravna uputa analitičaru koji piše preporuke (npr. "Kod ADD_ON_DIP traži konkretan katalizator, ne samo pad cijene: ta skupina je na 30 dana -0.1pp (n=17)."). Samo lekcije koje podaci podupiru; bez općenitih savjeta. Bolje manje lekcija nego nepouzdane.
+- Lekcija mijenja KAKO analitičar procjenjuje, ne pravila sustava i ne značenje akcija. Ne smije proturječiti pravilima i definicijama dolje: ako podaci traže drugačije pravilo (npr. kada se dio pozicije kupuje odmah), predloži promjenu parametra. Ne traži izbjegavanje neke akcije: lekcija iz 10/2026 "ne piši WATCHLIST" pretvorila je gotovo sve ideje u WAIT, čije zone nitko ne prati.
+- Značenje akcija u sustavu: BUY_BELOW = kupio bih na zoni koja je nadohvat; WATCHLIST = dobar posao, ali zona je dalje (sustav prati zonu i vraća ideju na ponovnu provjeru kad je dosegnuta); WAIT = još nema zone ili se čeka događaj; NO_ACTION = nije zanimljivo. Confidence znači isto za svaku akciju (6+ = ideja vrijedna novca).
 - Prijedlozi parametara: samo ključevi s popisa, najviše jedan korak po kvartalu, i samo ako relevantna skupina ima barem 30 slučajeva i interval ne prelazi nulu. Ako ništa ne zadovoljava uvjete, vrati prazan popis — to je sasvim u redu.
 - Izvještaj (report_markdown) čita ulagač: jasno, konkretno, bez žargona gdje nije nužan, 400-700 riječi. Odjeljci s naslovima (##): Sažetak (3-5 točaka), Što je radilo, Što nije radilo, Buy zona i plan ulaska, Confidence i filteri, Tvoj portfelj vs S&P 500, Predložene promjene, Što pratimo idući kvartal.
 - Kad podaci proturječe ulagačevim pravilima ili tezama, reci to otvoreno, s brojkama.
 
-PISMO: isključivo latinica."""
+PISMO: latinica s hrvatskim dijakritičkim znakovima (č, ć, š, ž, đ) — piši "Sažetak", "čekanje", "tržište", nikad "Sazetak". Nikad ćirilica."""
 
 
 def synthesis_schema() -> dict:
@@ -140,7 +143,7 @@ Napiši kvartalni izvještaj, lekcije i prijedloge parametara prema shemi."""
         "max_tokens": 16000,
         "system": system,
         "messages": [{"role": "user", "content": prompt}],
-        "output_config": {"format": {"type": "json_schema", "schema": synthesis_schema()}},
+        "output_config": {"format": {"type": "json_schema", "schema": synthesis_schema()}, "effort": SYNTHESIS_EFFORT},
     }
     try:
         # A declined request is re-run server-side on Anthropic's recommended fallback model

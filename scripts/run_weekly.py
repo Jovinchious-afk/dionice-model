@@ -10,17 +10,28 @@ Candidate pipeline:
   Portfolio:     always analyzed regardless of score
 
 The routine analyses go out as one Message Batch (half price; the email arrives
-somewhat later). BUY candidates are then re-checked by REVIEW_MODEL while the
-month's AI spend stays under the budget in model_params.
+somewhat later). BUY candidates and zones lowered while the price sat at the old
+zone are then re-checked by REVIEW_MODEL while the month's AI spend stays under the
+budget in model_params.
 
-Usage: python scripts/run_weekly.py [--dry-run] [--limit N] [--sync]
-  --dry-run  no email and no database writes; the HTML goes to a temp file
-  --limit N  analyse only the portfolio plus N universe candidates and one gem
-  --sync     plain API calls instead of a batch (faster, full price)
+Thursdays (the day after the Wednesday job marks reached buy zones) also revisit
+the newsletter's own ideas: every BUY_BELOW/ADD_ON_DIP call of the last 60 days and
+every watchlist idea whose zone the price reached, analysed again by REVIEW_MODEL
+in the same batch and shown in their own section from revisit_min_confidence up.
+A few random stocks per run are analysed by REVIEW_MODEL as well (the A/B sample,
+never published), so the learning report can compare the two models on the same
+stocks.
+
+Usage: python scripts/run_weekly.py [--dry-run] [--limit N] [--sync] [--revisit | --no-revisit]
+  --dry-run     no email and no database writes; the HTML goes to a temp file
+  --limit N     analyse only the portfolio plus N universe candidates and one gem
+  --sync        plain API calls instead of a batch (faster, full price, no A/B sample)
+  --revisit     run the Thursday revisit on any day; --no-revisit skips it on Thursday
 """
 
 import argparse
 import os
+import random
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -36,12 +47,13 @@ import anthropic
 from analysis.congress_tracker import get_congress_signals, get_tickers_from_congress
 from analysis.insider_tracker import get_insider_signals_batch
 from analysis.fundamentals import fetch_multiple
-from analysis.scorer import score_stock, classify_category, hard_exclude, resolve_weights
+from analysis.scorer import benchmark_coverage, score_stock, classify_category, hard_exclude, resolve_weights
 from analysis.ai_analyst import (
     BEARISH_ACTIONS,
     BULLISH_ACTIONS,
     MODEL,
     PROMPT_VERSION,
+    REVIEW_EFFORT,
     REVIEW_MODEL,
     analyze_stock,
     build_run_context,
@@ -60,9 +72,11 @@ from analysis.email_sender import build_html_email, send_email
 from analysis.investor_profile import load_investor_profile
 from analysis.params import load_params
 from analysis.portfolio import compute_holdings, usd_to_eur_now
+from analysis.prices import BENCHMARK, PriceBook, latest_closes
+from analysis.revisit import origin_line, revisit_prompt_block, select_revisits, stale_watchlist_rows
 from analysis.sector_context import format_context
 from analysis.sentiment_tracker import apply_market_cap, get_sentiment_batch
-from analysis.stock_discovery import select_candidates
+from analysis.stock_discovery import gem_pool_size, select_candidates
 from analysis.macro_context import fetch_macro_context, format_macro_for_prompt
 from analysis.supabase_client import get_supabase
 from analysis.ticker_health import get_dead_tickers, load_health, record_run
@@ -73,7 +87,12 @@ DECISION_REPEAT_DAYS = 30
 DECISION_ACTIONS = {"BUY_BELOW", "ADD_ON_DIP", "WATCHLIST", "HOLD", "SELL", "REDUCE"}
 # The watchlist tracks buy zones; HOLD/SELL/REDUCE concern positions already owned
 WATCHLIST_ACTIONS = {"BUY_BELOW", "ADD_ON_DIP", "WATCHLIST"}
-SECOND_PASS_EFFORT = "medium"
+SELL_GUARD_EFFORT = "high"  # a sell call on a held position is the rarest and costliest decision
+REVISIT_WEEKDAY = 3         # Thursday: the day after update_prices marks reached buy zones
+AB_SUFFIX = "__ab"          # batch key of the A/B request for a ticker
+YAHOO_SECTORS = 11          # sectors a complete P/E benchmark file covers
+MIN_GEM_POOL = 40           # below this the health line warns (the 2026-10-01 refresh left 0)
+GMAIL_CLIP_BYTES = 100_000  # Gmail hides everything past ~102 KB behind "[Message clipped]"
 
 
 def _num(value) -> float | None:
@@ -213,7 +232,8 @@ def apply_sell_guard(rec: dict, claude, system, prompt_kwargs: dict, ctx: dict, 
     )
     print(f"[run_weekly] Sell guard: {ticker} {original} with signals [{signals_txt}] → review by {REVIEW_MODEL}")
     try:
-        review = analyze_stock(claude, system, prompt_kwargs, ctx, model=REVIEW_MODEL, review_note=note, usage=usage)
+        review = analyze_stock(claude, system, prompt_kwargs, ctx, model=REVIEW_MODEL, review_note=note,
+                               effort=SELL_GUARD_EFFORT, usage=usage)
     except Exception as exc:
         rec["sell_guard_note"] = f"{original} uz pogoršanja ({signals_txt}); provjera modelom {REVIEW_MODEL} nije uspjela: {exc}"
         return rec
@@ -233,17 +253,19 @@ def second_pass(rec: dict, claude, system, prompt_kwargs: dict, ctx: dict, usage
     """
     BUY candidates are where the newsletter's value is (BUY_BELOW calls beat the
     S&P 500 by ~10pp over 30 days, WATCHLIST calls by nothing), so REVIEW_MODEL
-    re-checks them before they reach the email. Its verdict stands.
+    re-checks them before they reach the email, together with zones the routine
+    model lowered while the price sat at the old one. Its verdict stands.
     """
+    drift = f"\nUPOZORENJE SUSTAVA: {rec['zone_drift_note']}" if rec.get("zone_drift_note") else ""
     note = (
         f"Prvi model ({rec.get('model')}) predložio je {rec.get('action')} {rec.get('buy_zone') or ''} "
-        f"s confidence {rec.get('confidence')}. Njegova teza: {(rec.get('investment_thesis') or '')[:400]}\n"
+        f"s confidence {rec.get('confidence')}. Njegova teza: {(rec.get('investment_thesis') or '')[:400]}{drift}\n"
         "Neovisno provjeri podatke, valuaciju u odnosu na industriju, zonu kupnje i usporedbu s držanjem gotovine. "
         "Ako se ne slažeš, promijeni akciju ili zonu. Tvoja odluka je konačna."
     )
     try:
         review = analyze_stock(claude, system, prompt_kwargs, ctx, model=REVIEW_MODEL, review_note=note,
-                               effort=SECOND_PASS_EFFORT, usage=usage)
+                               effort=REVIEW_EFFORT, usage=usage)
     except Exception as exc:
         print(f"[run_weekly] Second pass failed for {rec.get('ticker')}: {exc}")
         return rec
@@ -283,6 +305,74 @@ def newsletter_worthy(rec: dict, min_confidence: int) -> bool:
         return True
     confidence = _num(rec.get("confidence"))
     return confidence is not None and confidence >= min_confidence
+
+
+def load_revisit_sources(client, days: int) -> tuple[list[dict], list[dict]]:
+    """Decisions of the revisit window and every active agent watchlist row."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        decisions = client.table("decisions").select("*").gte("recommended_at", cutoff).execute().data or []
+    except Exception as exc:
+        print(f"[run_weekly] Could not load decisions for the revisit: {exc}")
+        decisions = []
+    try:
+        watchlist = (client.table("watchlist").select("*").eq("status", "ACTIVE")
+                     .not_null("confidence").execute().data or [])
+    except Exception as exc:
+        print(f"[run_weekly] Could not load the watchlist for the revisit: {exc}")
+        watchlist = []
+    return decisions, watchlist
+
+
+def spy_change_since(book: PriceBook | None, since_iso: str, now: datetime) -> float | None:
+    """S&P 500 change in % from a past call to now, for the revisit line."""
+    if book is None:
+        return None
+    try:
+        start = datetime.fromisoformat(str(since_iso))
+    except ValueError:
+        return None
+    p0, p1 = book.close_on_or_before(BENCHMARK, start), book.close_on_or_before(BENCHMARK, now)
+    return (p1 / p0 - 1) * 100 if p0 and p1 else None
+
+
+def choose_ab_sample(jobs: dict[str, dict], revisits: dict, n: int) -> list[str]:
+    """Random stocks the review model analyses as well; positions, gems and revisits are left out."""
+    eligible = [t for t, job in jobs.items()
+                if not job["ctx"]["in_portfolio"] and not job["ctx"]["is_hidden_gem"] and t not in revisits]
+    return random.sample(eligible, min(max(n, 0), len(eligible)))
+
+
+def build_health_line(gem_pool: int, coverage: dict, month_cost: float | None, budget: float,
+                      failed: int, dead: int) -> str:
+    """One line at the bottom of the email, so a silent failure (like the empty gem pool) is seen at once."""
+    bench = f"P/E benchmark {coverage['sectors']}/{YAHOO_SECTORS} sektora"
+    if coverage.get("carried_over"):
+        bench += f" ({coverage['carried_over']} grupa iz prošlog kvartala)"
+    parts = [
+        f"gemova u bazenu {gem_pool}" + (" ⚠️" if gem_pool < MIN_GEM_POOL else ""),
+        bench + (" ⚠️" if coverage["sectors"] < YAHOO_SECTORS else ""),
+        f"AI ovaj mjesec ${month_cost:.2f} od ${budget:.2f}" if month_cost is not None else None,
+        f"analiza bez odgovora {failed}" + (" ⚠️" if failed else ""),
+        f"isključenih mrtvih tickera {dead}" if dead else None,
+    ]
+    return "Zdravlje sustava: " + " · ".join(p for p in parts if p)
+
+
+def expire_stale_watchlist(client, recommendations: list[dict], published: list[dict], history: dict,
+                           now: datetime, max_age_days: int) -> None:
+    """
+    The watchlist mirrors the agent's current view: an idea the latest analysis no
+    longer backs, or one nobody has re-analysed for months, goes to EXPIRED (it had
+    168 active rows going back to June, ADD_ON_DIP rows for stocks long sold among them).
+    """
+    analysed = {r.get("ticker"): r for r in recommendations if r.get("ticker") and not r.get("error")}
+    stale = stale_watchlist_rows(_load_active_ai_watchlist(client), now, analysed,
+                                 {r.get("ticker") for r in published}, WATCHLIST_ACTIONS, set(history), max_age_days)
+    if stale:
+        _expire_watchlist_rows(client, stale)
+        print(f"[run_weekly] Expired {len(stale)} watchlist rows the latest analyses no longer back: "
+              f"{sorted({row['symbol'] for row in stale})}")
 
 
 def _load_active_ai_watchlist(client) -> dict[str, list[dict]]:
@@ -415,12 +505,14 @@ def save_newsletter_to_supabase(client, subject: str, content: dict, email_type:
         print(f"[run_weekly] Error saving newsletter: {exc}")
 
 
-def main(dry_run: bool = False, limit: int | None = None, sync: bool = False):
+def main(dry_run: bool = False, limit: int | None = None, sync: bool = False, revisit: bool | None = None):
     today = datetime.now(timezone.utc)
     date_str = today.strftime("%Y-%m-%d")
     day_name = today.strftime("%A")
+    revisit_day = today.weekday() == REVISIT_WEEKDAY if revisit is None else revisit
     print(f"[run_weekly] Starting analysis for {date_str} ({day_name})"
-          f"{' — DRY RUN' if dry_run else ''}{' — sync calls' if sync else ' — batch'}")
+          f"{' — DRY RUN' if dry_run else ''}{' — sync calls' if sync else ' — batch'}"
+          f"{' — Thursday revisit' if revisit_day else ''}")
 
     db_client = get_supabase()
     write_client = None if dry_run else db_client
@@ -458,6 +550,23 @@ def main(dry_run: bool = False, limit: int | None = None, sync: bool = False):
         if dead_tickers:
             print(f"[run_weekly] {len(dead_tickers)} tickers retired as dead, excluded from sampling")
 
+    # 1a. Thursday revisit: the newsletter's own BUY ideas and the reached zones of the last weeks
+    revisit_origins: dict[str, dict] = {}
+    if revisit_day and db_client:
+        decisions_rows, watchlist_rows = load_revisit_sources(db_client, params["revisit_days"])
+        fresh_prices = latest_closes([w["symbol"] for w in watchlist_rows if w.get("buy_zone")]
+                                     + [d["symbol"] for d in decisions_rows if d.get("agent_buy_zone")])
+        revisit_origins = select_revisits(
+            decisions_rows, watchlist_rows, today, held=set(portfolio_tickers), dead=dead_tickers,
+            days=params["revisit_days"], max_n=int(params["revisit_max"]), prices=fresh_prices,
+        )
+        print(f"[run_weekly] Thursday revisit: {len(revisit_origins)} ideas — "
+              + ", ".join(f"{s} ({o['trigger']})" for s, o in revisit_origins.items()))
+    spy_book = PriceBook() if revisit_origins else None
+    if spy_book:
+        # one S&P 500 download from the oldest revisited call covers every revisit line
+        spy_book.closes(BENCHMARK, min(datetime.fromisoformat(o["date"]) for o in revisit_origins.values()))
+
     # 1b. Macro context (yfinance, free)
     print("[run_weekly] Fetching macro context...")
     macro_data = {}
@@ -492,7 +601,9 @@ def main(dry_run: bool = False, limit: int | None = None, sync: bool = False):
         # Portfolio tickers come first in main_candidates, so they always survive the cut
         main_candidates = main_candidates[: len(portfolio_tickers) + limit]
         gem_candidates = gem_candidates[:1]
-    all_candidates = list(dict.fromkeys(main_candidates + gem_candidates))
+    # A revisited idea is analysed as a revisit even when the sample drew it too
+    gem_candidates = [g for g in gem_candidates if g not in revisit_origins]
+    all_candidates = list(dict.fromkeys(main_candidates + list(revisit_origins) + gem_candidates))
     print(f"[run_weekly] Total candidates to fetch: {all_candidates}")
 
     # 4. StockTwits sentiment for all candidates — sole source of the hype signal
@@ -536,10 +647,13 @@ def main(dry_run: bool = False, limit: int | None = None, sync: bool = False):
     # learning report can check whether the filters throw away good stocks.
     print("[run_weekly] Applying hard exclusion filter...")
     shadow_rows: list[dict] = []
+    revisit_excluded: dict[str, str] = {}
     filtered_fundamentals = {}
     for ticker, fund in fundamentals_map.items():
         if fund.get("fetch_error"):
             print(f"[run_weekly] Skipping {ticker} — fetch error: {fund['fetch_error']}")
+            if ticker in revisit_origins:
+                revisit_excluded[ticker] = "nema podataka s Yahooa"
             continue
         if ticker in portfolio_tickers:
             filtered_fundamentals[ticker] = fund  # always keep portfolio positions
@@ -548,6 +662,8 @@ def main(dry_run: bool = False, limit: int | None = None, sync: bool = False):
         should_ex, reason = hard_exclude(fund, cat)
         if should_ex:
             print(f"[run_weekly] Hard exclude {ticker}: {reason}")
+            if ticker in revisit_origins:
+                revisit_excluded[ticker] = reason  # an earlier idea now fails the hard filter: worth saying
             shadow_rows.append({
                 "symbol": ticker, "action": "EXCLUDED", "reason": reason, "fundamentals": fund,
                 "features": build_features(fund, score_stock(fund, cat, weights), cat, sentiment_signals.get(ticker),
@@ -621,8 +737,10 @@ def main(dry_run: bool = False, limit: int | None = None, sync: bool = False):
         in_portfolio = ticker in positions_by_symbol
         fund = data["fundamentals"]
         low_data = data["score"].get("verdict") == "INSUFFICIENT_DATA"
+        origin = revisit_origins.get(ticker)
 
-        if not is_gem and not in_portfolio and (total_score < params["min_ai_score"] or low_data):
+        # Revisits skip the score floor like positions do: the idea already passed it once
+        if not is_gem and not in_portfolio and not origin and (total_score < params["min_ai_score"] or low_data):
             reason = (f"premalo podataka ({data['score'].get('coverage', 0) * 100:.0f}% pokrivenost)" if low_data
                       else f"score {total_score} < {params['min_ai_score']}")
             print(f"[run_weekly] Skipping {ticker} ({reason}, not in portfolio)")
@@ -683,7 +801,9 @@ def main(dry_run: bool = False, limit: int | None = None, sync: bool = False):
             previous_calls=build_previous_calls_block(history.get(ticker), fund),
             checklist_text=format_checklist(checklist_items),
             cycle_context=format_context(fund),
+            revisit_context=revisit_prompt_block(origin, _num(fund.get("current_price"))) if origin else None,
         )
+        last_call = (history.get(ticker) or [None])[0]
         ctx = {
             "fundamentals": fund,
             "score_result": data["score"],
@@ -694,31 +814,65 @@ def main(dry_run: bool = False, limit: int | None = None, sync: bool = False):
             "congress_signal": congress_signals.get(ticker),
             "position_weight": position.get("weight") if position else None,
             "params": params,
+            # The zone a lowered zone is compared with (finalize flags drift against it)
+            "reference_zone": origin["buy_zone"] if origin else (last_call or {}).get("buy_zone"),
         }
-        jobs[ticker] = {"prompt_kwargs": prompt_kwargs, "ctx": ctx, "checklist": checklist_items, "data": data}
+        jobs[ticker] = {"prompt_kwargs": prompt_kwargs, "ctx": ctx, "checklist": checklist_items, "data": data,
+                        "model": REVIEW_MODEL if origin else MODEL, "origin": origin}
 
     # 9. AI analysis: one batch at half price, then synchronous retries for anything missing
-    print(f"[run_weekly] Running AI analysis for {len(jobs)} stocks...")
+    revisit_jobs = [t for t, job in jobs.items() if job["origin"]]
+    print(f"[run_weekly] Running AI analysis for {len(jobs)} stocks"
+          + (f" ({len(revisit_jobs)} revisits on {REVIEW_MODEL})" if revisit_jobs else "") + "...")
     batch_messages = {}
+    ab_tickers: list[str] = []
     if use_batch and jobs:
         requests = {
-            ticker: request_params(system, build_stock_prompt(**job["prompt_kwargs"]))
+            ticker: request_params(system, build_stock_prompt(**job["prompt_kwargs"]), model=job["model"])
             for ticker, job in jobs.items()
         }
-        prewarm_cache(claude, system, usage)
+        # A/B sample: the review model on a few random stocks, for the learning report only
+        ab_n = int(params["ab_sample_per_run"]) if limit is None else min(2, int(params["ab_sample_per_run"]))
+        spent_before = month_spend(db_client)
+        if spent_before is not None and spent_before >= params["monthly_budget_usd"]:
+            print(f"[run_weekly] A/B sample skipped: month spend ${spent_before:.2f} ≥ budget")
+            ab_n = 0
+        ab_tickers = choose_ab_sample(jobs, revisit_origins, ab_n)
+        for ticker in ab_tickers:
+            requests[f"{ticker}{AB_SUFFIX}"] = request_params(
+                system, build_stock_prompt(**jobs[ticker]["prompt_kwargs"]), model=REVIEW_MODEL)
+        if ab_tickers:
+            print(f"[run_weekly] A/B sample on {REVIEW_MODEL}: {ab_tickers}")
+        for model in sorted({r["model"] for r in requests.values()}):
+            prewarm_cache(claude, system, usage, model=model)
         batch_messages = run_batch(claude, requests, usage=usage)
 
     recommendations = []
     for ticker, job in jobs.items():
+        model = job["model"]
         try:
             if ticker in batch_messages:
                 result, raw = parse_message(batch_messages[ticker])
-                rec = finalize(result, job["ctx"], MODEL, raw)
+                rec = finalize(result, job["ctx"], model, raw)
             else:
-                rec = analyze_stock(claude, system, job["prompt_kwargs"], job["ctx"], usage=usage)
+                rec = analyze_stock(claude, system, job["prompt_kwargs"], job["ctx"], model=model, usage=usage)
+
+            if rec.get("error") and model != REVIEW_MODEL:
+                # Haiku 5.5 has no server-side refusal fallback: a declined, cut-off or
+                # unreadable reply gets one retry on the review model
+                print(f"[run_weekly] {ticker}: {rec['error'][:120]} — retrying on {REVIEW_MODEL}")
+                retry = analyze_stock(claude, system, job["prompt_kwargs"], job["ctx"], model=REVIEW_MODEL, usage=usage)
+                if not retry.get("error"):
+                    rec = retry
 
             if job["ctx"]["in_portfolio"] and rec.get("action") in BEARISH_ACTIONS:
                 rec = apply_sell_guard(rec, claude, system, job["prompt_kwargs"], job["ctx"], usage)
+
+            if job["origin"]:
+                rec["revisit"] = job["origin"]
+                rec["revisit_line"] = origin_line(
+                    job["origin"], _num(job["data"]["fundamentals"].get("current_price")),
+                    spy_change_since(spy_book, job["origin"]["date"], today))
 
             rec["checklist_fails"] = [text for status, text in job["checklist"] if status == "✗"]
             rec["checklist_summary"] = checklist_summary(job["checklist"])
@@ -730,13 +884,27 @@ def main(dry_run: bool = False, limit: int | None = None, sync: bool = False):
         except Exception as exc:
             print(f"[run_weekly] AI analysis failed for {ticker}: {exc}")
 
-    # 9b. Second pass on BUY candidates while the month's AI spend is under budget
-    candidates = sorted(
-        (r for r in recommendations
-         if r.get("action") in BULLISH_ACTIONS and not r.get("error")
+    ab_recs = []
+    for ticker in ab_tickers:
+        message = batch_messages.get(f"{ticker}{AB_SUFFIX}")
+        if message is None:
+            continue
+        result, raw = parse_message(message)
+        ab_rec = finalize(result, jobs[ticker]["ctx"], REVIEW_MODEL, raw)
+        if not ab_rec.get("error"):
+            ab_recs.append(ab_rec)
+
+    # 9b. Second pass on BUY candidates, then on zones lowered while the price sat at
+    # the old one, while the month's AI spend is under budget. Calls the review model
+    # already made (revisits, retries) are not sent to it again.
+    routine = [r for r in recommendations if r.get("model") != REVIEW_MODEL and not r.get("error")]
+    buy_candidates = sorted(
+        (r for r in routine if r.get("action") in BULLISH_ACTIONS
          and (r.get("confidence") or 0) >= params["second_pass_min_confidence"]),
         key=lambda r: -(r.get("confidence") or 0),
-    )[: int(params["second_pass_max_per_run"])]
+    )
+    drift_candidates = [r for r in routine if r.get("zone_drift") and r not in buy_candidates]
+    candidates = (buy_candidates + drift_candidates)[: int(params["second_pass_max_per_run"])]
     if candidates:
         spent = month_spend(db_client)
         projected = (spent or 0.0) + usage.cost
@@ -756,26 +924,37 @@ def main(dry_run: bool = False, limit: int | None = None, sync: bool = False):
     for rec in recommendations:
         gem_label = " 💎" if rec.get("is_hidden_gem") else ""
         held_label = " 📌" if rec.get("in_portfolio") else ""
-        print(f"[run_weekly] {rec.get('ticker')}{gem_label}{held_label}: {rec.get('action')} "
-              f"(confidence {rec.get('confidence')}, {rec.get('model')})")
+        revisit_label = " 🔁" if rec.get("revisit") else ""
+        drift_label = " ⚠️zona" if rec.get("zone_drift") else ""
+        print(f"[run_weekly] {rec.get('ticker')}{gem_label}{held_label}{revisit_label}: {rec.get('action')} "
+              f"(confidence {rec.get('confidence')}, {rec.get('model')}){drift_label}")
+    for rec in ab_recs:
+        main_rec = next((r for r in recommendations if r.get("ticker") == rec.get("ticker")), {})
+        print(f"[run_weekly] A/B {rec.get('ticker')}: {REVIEW_MODEL} {rec.get('action')} ({rec.get('confidence')}) "
+              f"vs {main_rec.get('model')} {main_rec.get('action')} ({main_rec.get('confidence')})")
 
     # 9c. What production actually observed (so the universe self-cleans) and every
     # analysis with its features (memory for the next run, data for the learning report)
-    features_by_ticker = {}
-    for rec in recommendations:
-        job = jobs.get(rec.get("ticker"))
-        if not job:
-            continue
+    def features_for(rec: dict, job: dict, **extra) -> dict:
         guards = [name for name, key in (("sell_guard", "sell_guard_note"), ("concentration", "concentration_note"),
-                                         ("hype", "hype_note")) if rec.get(key)]
-        features_by_ticker[rec["ticker"]] = build_features(
+                                         ("hype", "hype_note"), ("zone_drift", "zone_drift_note")) if rec.get(key)]
+        return build_features(
             job["data"]["fundamentals"], job["data"]["score"], job["data"]["category"],
             job["ctx"]["sentiment_signal"], job["checklist"],
             is_gem=job["data"]["is_gem"], in_portfolio=job["ctx"]["in_portfolio"],
             position_weight=job["ctx"]["position_weight"], prompt_version=PROMPT_VERSION,
             model_category=rec.get("category"), entry_plan=rec.get("entry_plan"),
             first_pass=rec.get("first_pass"), guards=guards or None,
+            revisit_trigger=(job["origin"] or {}).get("trigger"),
+            zone_drift=True if rec.get("zone_drift") else None,
+            ref_zone_reached=True if rec.get("reference_zone_reached") else None,
+            **extra,
         )
+
+    features_by_ticker = {rec["ticker"]: features_for(rec, jobs[rec["ticker"]])
+                          for rec in recommendations if rec.get("ticker") in jobs}
+    ab_features = {rec["ticker"]: features_for(rec, jobs[rec["ticker"]], ab_shadow=True, ab_pair_model=MODEL)
+                   for rec in ab_recs}
     if write_client:
         actioned = [
             r.get("ticker") for r in recommendations
@@ -783,15 +962,26 @@ def main(dry_run: bool = False, limit: int | None = None, sync: bool = False):
         ]
         record_run(write_client, raw_fundamentals, actioned_symbols=actioned, health=health)
         record_analyses(write_client, recommendations, fundamentals_map, features_by_ticker, shadow_rows)
+        if ab_recs:
+            record_analyses(write_client, ab_recs, fundamentals_map, ab_features)
     else:
-        print(f"[run_weekly] DRY RUN — would log {len(recommendations)} analyses + {len(shadow_rows)} rows without AI")
+        print(f"[run_weekly] DRY RUN — would log {len(recommendations)} analyses + {len(ab_recs)} A/B "
+              f"+ {len(shadow_rows)} rows without AI")
 
     # 9d. Everything below works on the published subset. Weak calls stay in
     # analysis_log (so the next run still remembers them) but never reach the email,
-    # the watchlist or the decision log.
-    published, dropped = [], []
+    # the watchlist or the decision log. A revisit is published from its own floor;
+    # below it the email still names it, because "this idea no longer holds" is news.
+    published, dropped, revisits_below = [], [], []
     for rec in recommendations:
-        (published if newsletter_worthy(rec, params["min_email_confidence"]) else dropped).append(rec)
+        if rec.get("revisit"):
+            (published if (rec.get("confidence") or 0) >= params["revisit_min_confidence"]
+             else revisits_below).append(rec)
+        elif newsletter_worthy(rec, params["min_email_confidence"]):
+            published.append(rec)
+        else:
+            dropped.append(rec)
+    revisits_below += [{"ticker": t, "excluded_reason": reason} for t, reason in revisit_excluded.items()]
     if dropped:
         dropped_txt = ", ".join(f"{r.get('ticker')} ({r.get('confidence')})" for r in dropped)
         print(f"[run_weekly] Below confidence {params['min_email_confidence']}, not in newsletter: {dropped_txt}")
@@ -809,6 +999,13 @@ def main(dry_run: bool = False, limit: int | None = None, sync: bool = False):
         f"Gotovina: ${cash['cash_usd']:,.0f} + €{cash['cash_eur']:,.0f}"
         if cash["cash_usd"] or cash["cash_eur"] else None
     )
+    month_before = month_spend(db_client)
+    health_line = build_health_line(
+        gem_pool_size(), benchmark_coverage(),
+        (month_before + usage.cost) if month_before is not None else None, params["monthly_budget_usd"],
+        failed=sum(1 for r in recommendations if r.get("error")), dead=len(dead_tickers),
+    )
+    print(f"[run_weekly] {health_line}")
 
     html = build_html_email(
         summary=summary,
@@ -818,9 +1015,16 @@ def main(dry_run: bool = False, limit: int | None = None, sync: bool = False):
         email_type="WEEKLY",
         cash_line=cash_line,
         concentration_cap=params["concentration_cap"],
+        revisits_below=revisits_below,
+        revisit_min_confidence=int(params["revisit_min_confidence"]),
+        revisit_days=int(params["revisit_days"]),
+        health_line=health_line,
     )
 
     print(usage.summary())
+    size = len(html.encode("utf-8"))
+    print(f"[run_weekly] Email size {size / 1024:.0f} KB"
+          + (" — WARNING: Gmail clips messages above ~102 KB" if size > GMAIL_CLIP_BYTES else ""))
     if dry_run:
         path = os.path.join(tempfile.gettempdir(), f"dionice_dry_run_{date_str}.html")
         with open(path, "w", encoding="utf-8") as f:
@@ -837,12 +1041,16 @@ def main(dry_run: bool = False, limit: int | None = None, sync: bool = False):
     # 12. Save to Supabase
     if write_client:
         print("[run_weekly] Saving to Supabase...")
+        expire_stale_watchlist(write_client, recommendations, published, history, today,
+                               int(params["watchlist_max_age_days"]))
         save_recommendations_to_supabase(write_client, published, fundamentals_map, has_v8)
         save_newsletter_to_supabase(write_client, subject, summary, "WEEKLY")
         usage.save(write_client)
 
     gems_analyzed = sum(1 for r in recommendations if r.get("is_hidden_gem"))
-    print(f"[run_weekly] Done. {len(recommendations)} stocks analyzed ({gems_analyzed} hidden gems), "
+    revisits_shown = sum(1 for r in published if r.get("revisit"))
+    print(f"[run_weekly] Done. {len(recommendations)} stocks analyzed ({gems_analyzed} hidden gems, "
+          f"{len(revisit_jobs)} revisits of which {revisits_shown} shown, {len(ab_recs)} A/B), "
           f"{len(published)} in the newsletter, {len(dropped)} below confidence {params['min_email_confidence']}.")
 
 
@@ -851,5 +1059,10 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run", action="store_true", help="no email, no database writes")
     parser.add_argument("--limit", type=int, default=None, help="analyse only the portfolio plus N candidates")
     parser.add_argument("--sync", action="store_true", help="plain API calls instead of a Message Batch")
+    revisit_flag = parser.add_mutually_exclusive_group()
+    revisit_flag.add_argument("--revisit", dest="revisit", action="store_true", default=None,
+                              help="run the Thursday revisit today")
+    revisit_flag.add_argument("--no-revisit", dest="revisit", action="store_false",
+                              help="skip the revisit even on Thursday")
     args = parser.parse_args()
-    main(dry_run=args.dry_run, limit=args.limit, sync=args.sync)
+    main(dry_run=args.dry_run, limit=args.limit, sync=args.sync, revisit=args.revisit)

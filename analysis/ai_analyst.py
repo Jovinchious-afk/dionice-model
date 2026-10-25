@@ -3,10 +3,14 @@ AI analyst module: turns fundamentals, the investor's own checklist, cycle/seaso
 context, the model's previous calls on the same stock, StockTwits sentiment,
 insider and Congress activity into structured recommendations.
 
-Haiku 4.5 does the routine analysis, sent through the Message Batches API (half
-price) with the shared part of the prompt cached. REVIEW_MODEL re-checks the few
-calls that matter most: a SELL/REDUCE on a held position (the sell guard in
-run_weekly) and BUY candidates (the second pass).
+Claude Haiku 5.5 does the routine analysis, sent through the Message Batches API
+(half price) with the shared part of the prompt cached. REVIEW_MODEL (Claude
+Sonnet 5.5) handles the calls that matter most: a SELL/REDUCE on a held position
+(the sell guard in run_weekly), BUY candidates and zone-drift cases (the second
+pass), the Thursday revisits, a small A/B sample and the newsletter summary.
+Haiku 5.5 replaced Haiku 4.5 on 2026-10-25: better at following instructions,
+which is what the measured failures were (zones lowered with the price, calls
+flipping at the 5/6 boundary), at a tenth of the per-token price.
 
 Replies are constrained to a JSON schema (structured outputs), so a reply can no
 longer fail to parse — before this, about 6% of analyses were lost that way. The
@@ -25,13 +29,30 @@ import time
 import anthropic
 from dotenv import load_dotenv
 
+from analysis.prices import parse_buy_zone
+from analysis.revisit import zone_drift, zone_reached_now
+
 load_dotenv()
 
-MODEL = "claude-haiku-4-5-20251001"
+MODEL = "claude-haiku-5-5"
 # Re-checks sell calls on held positions that passed the deterministic sell guard,
-# and BUY candidates before they reach the newsletter.
-REVIEW_MODEL = "claude-sonnet-5"
-PROMPT_VERSION = 3
+# BUY candidates before they reach the newsletter, and analyses the Thursday revisits.
+REVIEW_MODEL = "claude-sonnet-5-5"
+PROMPT_VERSION = 4
+
+# Both models think adaptively and the thinking counts toward max_tokens. Effort is
+# pinned per model: the prompt cache is keyed on it, so the pre-warm, the batch
+# and the synchronous retries of one model must all send the same value.
+ANALYST_EFFORT = "high"   # Haiku 5.5 default is medium; high for knowledge work and strict rules
+REVIEW_EFFORT = "medium"  # Sonnet 5.5 levels are recalibrated; medium for judgment calls
+DEFAULT_EFFORT = {MODEL: ANALYST_EFFORT, REVIEW_MODEL: REVIEW_EFFORT}
+MAX_TOKENS = 16000
+SUMMARY_EFFORT = "low"
+# A declined request is re-run server-side on a fallback model. Only on synchronous
+# calls (the Batches API rejects the parameter) and only for models that have one:
+# Claude Haiku 5.5 has none, so run_weekly retries its failures on REVIEW_MODEL.
+FALLBACK_BETA = "server-side-fallback-2026-07-01"
+FALLBACK_MODELS = {REVIEW_MODEL, "claude-opus-5-5"}
 
 BULLISH_ACTIONS = {"BUY_BELOW", "ADD_ON_DIP"}
 BEARISH_ACTIONS = {"SELL", "REDUCE"}
@@ -198,12 +219,25 @@ VELIČINA POZICIJE (jedina pravila; EUR iznosi su u kontekstu):
 
 BUY ZONE:
 - Temelji je na procjeni vrijednosti (forward P/E vs industrija i vlastita povijest, FCF yield, PEG), NE na postotku ispod trenutne cijene
-- Ne spuštaj zonu samo zato što je cijena pala; ako mijenjaš zonu u odnosu na zadnju analizu, objasni zašto u change_vs_last
+- Zona nikad nije iznad trenutne cijene; ako je dionica već dovoljno jeftina, zona smije biti na trenutnoj cijeni
+- Kad je cijena pala u tvoju prethodnu zonu, to NIJE razlog da zonu spustiš: procijeni je li se promijenila vrijednost. Ako nije, potvrdi zonu; ako jest, u change_vs_last navedi koja brojka. Sustav označava zonu spuštenu dok je cijena u staroj zoni
+- Ako mijenjaš zonu u odnosu na zadnju analizu, objasni zašto u change_vs_last
 
-AKCIJE:
+AKCIJE (što koja znači):
+- BUY_BELOW: kupio bih na zoni ili ispod nje, a zona je nadohvat (obično do ~10% ispod cijene); traži confidence iznad praga za kupnju
+- WATCHLIST: dobar posao koji vrijedi kupiti, ali tek na zoni koja je dalje od cijene ili uvjerenje još nije dovoljno. Sustav prati zonu i vraća ideju na ponovnu provjeru kad je cijena dosegne
+- WAIT: još nemaš zonu temeljenu na vrijednosti ili čekaš konkretan događaj (npr. earnings za manje od dva tjedna); buy_zone je tada "N/A"
+- NO_ACTION: posao nije zanimljiv za ovog ulagača
 - Dionice koje ulagač NE drži: BUY_BELOW, WATCHLIST, WAIT, NO_ACTION
 - Dionice koje ulagač DRŽI: HOLD (zadano), ADD_ON_DIP, REDUCE, SELL
 - HOLD je normalan ishod za dobru poziciju — ne traži akciju radi akcije
+
+CONFIDENCE (isti broj znači isto kod svake akcije):
+- 8-10: iznimno uvjerenje u tezu i valuaciju
+- 6-7: ideja vrijedna novca, za kupnju ili praćenje zone
+- 4-5: zanimljivo, ali nedovoljno (u ovom sustavu ta skupina nije pobijedila indeks)
+- 1-3: ne
+- WATCHLIST 7 je jednako dobar posao kao BUY_BELOW 7; razlika je samo u tome koliko je cijena daleko od zone
 
 STROGA PRAVILA:
 1. Preporučuj samo dionice dostupne na Revolut platformi
@@ -253,7 +287,7 @@ FIELD_GUIDE = """POLJA ODGOVORA (redom kojim ih pišeš — prvo analiza, pa odl
 - business_explanation: 2 rečenice — čime se firma bavi i kako zarađuje
 - valuation_verdict: jeftina/fer/skupa vs industrija s 2-3 ključne brojke, 1 rečenica
 - cycle_view: gdje je dionica u ciklusu/sezoni i što to znači za idućih 3-6 mjeseci, 1 rečenica; "nije ciklička" ako nije
-- change_vs_last: što se promijenilo od tvoje zadnje analize (brojke/činjenice) i zašto akcija ostaje ili se mijenja, 1 rečenica; "prva analiza" ako je nema
+- change_vs_last: što se promijenilo od tvoje zadnje analize (brojke/činjenice) i zašto akcija ostaje ili se mijenja, 1 rečenica; "prva analiza" ako je nema. Kod PONOVNE PROVJERE usporedi s prvom preporukom: je li se promijenila vrijednost ili samo cijena
 - investor_view: INTERNO — kako bi ULAGAČ ocijenio dionicu kroz svoj checklist i makro pogled, 1-2 rečenice; "N/A" ako profil nije naveden
 - counter_argument: INTERNO — najjači protuargument ulagačevom pogledu (podaci, povijest, što tržište već zna), 1-2 rečenice; "N/A" ako profil nije naveden
 - catalyst: konkretan događaj ili trend koji može otključati vrijednost u 6-18 mjeseci, 1 rečenica
@@ -266,7 +300,7 @@ FIELD_GUIDE = """POLJA ODGOVORA (redom kojim ih pišeš — prvo analiza, pa odl
 - target_price: npr. "$32.00" ili "N/A"
 - position_size: npr. "mala (3-5% / €500-750)" — stvarni iznosi iz VELIČINA POZICIJE; "N/A" za HOLD/WAIT/WATCHLIST
 - investment_thesis: najviše 3 rečenice — zašto ova dionica, zašto sada
-- confidence: cijeli broj 1-10"""
+- confidence: cijeli broj 1-10, prema ljestvici CONFIDENCE"""
 
 
 def analysis_schema() -> dict:
@@ -404,6 +438,7 @@ def build_stock_prompt(
     checklist_text: str | None = None,
     cycle_context: str | None = None,
     review_note: str | None = None,
+    revisit_context: str | None = None,
 ) -> str:
     """The stock-specific part of the prompt (the user message)."""
     symbol = fundamentals.get("symbol", "")
@@ -463,6 +498,7 @@ UPOZORENJE: Ne preporučuj SELL ili REDUCE ako se nije ostvario neki od ulagače
 """
 
     review_block = f"\n🔎 DRUGA PROVJERA:\n{review_note}" if review_note else ""
+    revisit_block = f"\n{revisit_context}" if revisit_context else ""
     previous_block = (
         f"\n{previous_calls}" if previous_calls
         else "\nTVOJE PRETHODNE ANALIZE: nema (prva analiza ove dionice u zadnjih 60 dana)."
@@ -483,7 +519,7 @@ UPOZORENJE: Ne preporučuj SELL ili REDUCE ako se nije ostvario neki od ulagače
     coverage_line = f" | pokrivenost podacima {coverage * 100:.0f}%" if coverage is not None else ""
 
     return f"""Analiziraj dionicu {symbol} ({fundamentals.get('name', '')}) NA HRVATSKOM JEZIKU (financijski termini mogu ostati na engleskom).
-{holding_block}{gem_context}{personal_context}{review_block}{earnings_block}{week52_block}{watchlist_block}{sector_block}{sentiment_block}
+{holding_block}{gem_context}{personal_context}{revisit_block}{review_block}{earnings_block}{week52_block}{watchlist_block}{sector_block}{sentiment_block}
 {previous_block}
 {checklist_block}
 {cycle_block}
@@ -509,15 +545,19 @@ def request_params(
     model: str = MODEL,
     effort: str | None = None,
 ) -> dict:
-    """Messages API parameters for one analysis — used as-is by messages.create and by batches."""
+    """
+    Messages API parameters for one analysis — used as-is by messages.create and by
+    batches. Effort defaults to the model's pinned level (see DEFAULT_EFFORT).
+    """
     output_config: dict = {"format": {"type": "json_schema", "schema": analysis_schema()}}
-    if effort and model != MODEL:  # Haiku 4.5 has no effort parameter
+    effort = effort or DEFAULT_EFFORT.get(model)
+    if effort:
         output_config["effort"] = effort
     return {
         "model": model,
-        # Haiku's complete answers measured 1.3-1.9K output tokens; the review model
-        # thinks adaptively before answering, which needs more room.
-        "max_tokens": 4000 if model == MODEL else 16000,
+        # Answers measured 1.3-1.9K tokens; adaptive thinking comes on top and counts
+        # toward the cap (JLL's reply was cut off once at the old 4K cap).
+        "max_tokens": MAX_TOKENS,
         "system": system,
         "messages": [{"role": "user", "content": user_prompt}],
         "output_config": output_config,
@@ -631,24 +671,53 @@ def finalize(result: dict | None, ctx: dict, model: str, raw_text: str = "") -> 
             "Teza ostaje — ovo nije poziv na prodaju, nego na to da novi novac ide u druge dionice."
         )
 
+    # The zone follows value, not price: lowering it while the price already sits at
+    # the previous zone is flagged (and run_weekly sends a routine call to the second pass)
+    price = _num(fundamentals.get("current_price"))
+    reference_zone = ctx.get("reference_zone")
+    if reference_zone:
+        rec["reference_zone_reached"] = zone_reached_now(reference_zone, price)
+        drift = zone_drift(reference_zone, rec.get("buy_zone"), price)
+        if drift:
+            rec["zone_drift"] = drift
+            rec["zone_drift_note"] = (
+                f"Zona spuštena s ${drift['from']:,.2f} na ${drift['to']:,.2f} ({drift['pct']:+.1f}%) dok je cijena "
+                f"${drift['price']:,.2f} već bila u staroj zoni. Pravilo ulagača: zona prati vrijednost, ne cijenu — "
+                "provjeri u 'Promjena od zadnje analize' je li se promijenila neka brojka."
+            )
+
     if rec.get("action") in BULLISH_ACTIONS and confidence >= params["starter_min_confidence"]:
         fraction = params["starter_fraction"]
-        price = _num(fundamentals.get("current_price"))
         price_txt = f" (oko ${price:,.2f})" if price else ""
+        zone_price = parse_buy_zone(rec.get("buy_zone"))
         rec["entry_plan"] = "starter"
-        rec["entry_plan_note"] = (
-            f"Plan ulaska: ~{fraction * 100:.0f}% pozicije odmah po tržišnoj cijeni{price_txt}, "
-            f"ostatak kad cijena dođe u zonu {rec.get('buy_zone') or 'N/A'}. Kod visokog uvjerenja čekanje "
-            "cijele zone često propusti rast — kvartalni izvještaj učenja mjeri koja strategija bolje radi."
-        )
+        if price and zone_price and price <= zone_price:
+            rec["entry_plan_note"] = (
+                f"Plan ulaska: cijena{price_txt} je već u zoni {rec.get('buy_zone')}. ~{fraction * 100:.0f}% pozicije "
+                "sada, ostatak postupno u idućim tjednima: ideje kojima je zona dosegnuta u ovom sustavu su "
+                "kratkoročno često padale još malo, a na 90 dana su vodile."
+            )
+        else:
+            rec["entry_plan_note"] = (
+                f"Plan ulaska: ~{fraction * 100:.0f}% pozicije odmah po tržišnoj cijeni{price_txt}, "
+                f"ostatak kad cijena dođe u zonu {rec.get('buy_zone') or 'N/A'}. Kod visokog uvjerenja čekanje "
+                "cijele zone često propusti rast — kvartalni izvještaj učenja mjeri koja strategija bolje radi."
+            )
 
     rec["evidence_table"] = build_evidence(ctx, rec)
     return rec
 
 
 def call_claude(client: anthropic.Anthropic, params: dict, usage=None):
-    """One synchronous Messages API call; usage is recorded when a tracker is given."""
-    message = client.messages.create(**params)
+    """
+    One synchronous Messages API call; usage is recorded when a tracker is given.
+    Models with a server-side refusal fallback get it (the model that actually
+    answered is what usage records).
+    """
+    if params["model"] in FALLBACK_MODELS:
+        message = client.beta.messages.create(betas=[FALLBACK_BETA], fallbacks="default", **params)
+    else:
+        message = client.messages.create(**params)
     if usage is not None:
         usage.add_message(message, batch=False, fallback_model=params["model"])
     return message
@@ -672,24 +741,28 @@ def analyze_stock(
     return finalize(result, ctx, model, raw)
 
 
-def prewarm_cache(client: anthropic.Anthropic, system: list[dict], usage=None) -> None:
+def prewarm_cache(client: anthropic.Anthropic, system: list[dict], usage=None, model: str = MODEL) -> None:
     """
     Writes the shared prefix to the cache once before the batch. Batch requests run
     concurrently and caching is best-effort there: in 3-request test batches 0 of 3
     read the cache without this and 1 of 3 with it. That is why the batch uses the
     5-minute TTL — a 1.25x write pays off above ~22% hits, the 1-hour TTL's 2x write
     only above ~53%. llm_usage records the real reads and writes of every run.
-    max_tokens=0 is not accepted together with structured outputs, hence 1.
+    Caches are per model and keyed on effort, so each model in the batch is warmed
+    with its own pinned effort. max_tokens=0 is not accepted together with
+    structured outputs, hence 1.
     """
-    params = request_params(system, "warmup")
+    params = request_params(system, "warmup", model=model)
     params["max_tokens"] = 1
     try:
-        message = call_claude(client, params, usage)
+        message = client.messages.create(**params)
+        if usage is not None:
+            usage.add_message(message, batch=False, fallback_model=model)
         written = getattr(message.usage, "cache_creation_input_tokens", 0) or 0
         read = getattr(message.usage, "cache_read_input_tokens", 0) or 0
-        print(f"[ai_analyst] Cache pre-warm: {written:,} tokens written, {read:,} already cached")
+        print(f"[ai_analyst] Cache pre-warm {model}: {written:,} tokens written, {read:,} already cached")
     except Exception as exc:
-        print(f"[ai_analyst] Cache pre-warm failed (non-critical): {exc}")
+        print(f"[ai_analyst] Cache pre-warm {model} failed (non-critical): {exc}")
 
 
 def _custom_ids(keys: list[str]) -> dict[str, str]:
@@ -798,20 +871,30 @@ def generate_weekly_summary(
     current_date: str,
     usage=None,
 ) -> dict:
-    """Generates the newsletter summary from the individual recommendations."""
+    """
+    Generates the newsletter summary from the individual recommendations, on
+    REVIEW_MODEL: the summary is the first thing the investor reads, and the routine
+    model wrote "CarGurus — transportna tvrtka" from the ticker alone. Each analysis
+    now carries its own business description, so nothing has to be guessed.
+    """
     slim_recs = [
         {
             "ticker": r.get("ticker"),
+            "company_name": r.get("company_name"),
+            "business": (r.get("business_explanation") or "")[:240],
             "action": r.get("action"),
             "confidence": r.get("confidence"),
             "buy_zone": r.get("buy_zone"),
             "target_price": r.get("target_price"),
             "category": r.get("category"),
+            "thesis": (r.get("investment_thesis") or "")[:240],
             "is_hidden_gem": r.get("is_hidden_gem", False),
             "in_portfolio": r.get("in_portfolio", False),
+            "revisit": bool(r.get("revisit")),
             "sell_guard_note": r.get("sell_guard_note"),
             "concentration_note": r.get("concentration_note"),
             "entry_plan_note": r.get("entry_plan_note"),
+            "zone_drift_note": r.get("zone_drift_note"),
         }
         for r in all_recommendations
     ]
@@ -827,18 +910,19 @@ INDIVIDUALNE ANALIZE:
 Pravila:
 - top_actions: odaberi max 4-7 ukupnih akcija (BUY_BELOW, ADD_ON_DIP, HOLD, WATCHLIST, WAIT, SELL, REDUCE, NO_TRADE); buy_zone "N/A" ako je nema
 - Ako nijedna dionica ne zadovoljava kriterije kvalitete, no_trade_reason objašnjava zašto nema jakih kupnji; inače prazan string
-- Prioritet: postojeće pozicije u portfelju prvo (in_portfolio=true), zatim nove ideje
+- Prioritet: postojeće pozicije u portfelju prvo (in_portfolio=true), zatim ponovno provjerene ideje (revisit=true), zatim nove ideje
+- Čime se tvrtka bavi piši SAMO iz polja company_name i business; ne zaključuj iz tickera
 - Ako je sell_guard_note ili concentration_note postavljen, spomeni ga u portfolio_note
 - overall_market_comment: 2 rečenice o trenutnom tržišnom okruženju
 - portfolio_note: napomena o pozicijama u portfelju (HOLD/ADD/REDUCE), koncentraciji i gotovini
 - Sve piši NA HRVATSKOM"""
 
     params = {
-        "model": MODEL,
-        "max_tokens": 2000,
+        "model": REVIEW_MODEL,
+        "max_tokens": MAX_TOKENS,
         "system": system,
         "messages": [{"role": "user", "content": prompt}],
-        "output_config": {"format": {"type": "json_schema", "schema": SUMMARY_SCHEMA}},
+        "output_config": {"format": {"type": "json_schema", "schema": SUMMARY_SCHEMA}, "effort": SUMMARY_EFFORT},
     }
     try:
         message = call_claude(client, params, usage)

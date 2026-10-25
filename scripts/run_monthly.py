@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import anthropic
 
-from analysis.ai_analyst import REVIEW_MODEL, strip_foreign_script
+from analysis.ai_analyst import REVIEW_MODEL, call_claude, strip_foreign_script
 from analysis.email_sender import send_email
 from analysis.fundamentals import fetch_multiple
 from analysis.investor_profile import load_investor_profile
@@ -174,13 +174,12 @@ Odjeljci (HTML, jednostavni inline stilovi, bez CSS frameworka, bez <html>/<body
 Ton: izravan, analitičan, bez praznih fraza. Najviše 600 riječi."""
 
     system = ("Ti si disciplinirani analitičar portfelja koji piše hrvatskim standardnim jezikom "
-              "(\"što\", ne \"šta\"), isključivo latinicom.")
+              "(\"što\", ne \"šta\"), latinicom s hrvatskim dijakritičkim znakovima (č, ć, š, ž, đ).")
     if profile:
         system += f"\n\nPROFIL ULAGAČA (kontekst, ne razlog za odluku):\n{profile}"
-    response = claude.messages.create(model=MODEL, max_tokens=16000, system=system,
-                                      output_config={"effort": "medium"},
-                                      messages=[{"role": "user", "content": prompt}])
-    usage.add_message(response, fallback_model=MODEL)
+    response = call_claude(claude, {"model": MODEL, "max_tokens": 16000, "system": system,
+                                    "output_config": {"effort": "medium"},
+                                    "messages": [{"role": "user", "content": prompt}]}, usage)
     if response.stop_reason == "max_tokens":
         print("[run_monthly] WARNING: response hit max_tokens — report may be truncated.")
 

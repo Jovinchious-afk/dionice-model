@@ -124,6 +124,24 @@ def _cutoff_iso(days: int) -> str:
     return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def is_ab_shadow(row: dict) -> bool:
+    """A/B comparison rows: the review model's call on a stock the routine model published."""
+    return bool(((row.get("snapshot") or {}).get("features") or {}).get("ab_shadow"))
+
+
+def _all_rows_since(client, cutoff: str) -> list[dict]:
+    """
+    Every analysis_log row since cutoff, newest first. Supabase answers at most 1000
+    rows per request, and with revisits and the A/B sample 60 days of rows pass that,
+    so the rows are paged (by id, the stable order) and sorted here.
+    """
+    if hasattr(client, "fetch_all"):
+        rows = client.fetch_all(TABLE, "*", gte=("analyzed_at", cutoff))
+    else:
+        rows = client.table(TABLE).select("*").gte("analyzed_at", cutoff).execute().data or []
+    return sorted(rows, key=lambda r: str(r.get("analyzed_at") or ""), reverse=True)
+
+
 def load_recent_history(client, days: int = HISTORY_DAYS) -> dict[str, list[dict]]:
     """Recent AI calls per symbol, newest first. analysis_log wins; decisions fill the gaps."""
     if not client:
@@ -132,10 +150,8 @@ def load_recent_history(client, days: int = HISTORY_DAYS) -> dict[str, list[dict
     by_symbol: dict[str, list[dict]] = {}
 
     try:
-        rows = (client.table(TABLE).select("*").gte("analyzed_at", cutoff)
-                .order("analyzed_at", desc=True).execute().data or [])
-        for row in rows:
-            if row.get("action") in SHADOW_ACTIONS or not row.get("model"):
+        for row in _all_rows_since(client, cutoff):
+            if row.get("action") in SHADOW_ACTIONS or not row.get("model") or is_ab_shadow(row):
                 continue
             by_symbol.setdefault(row["symbol"], []).append(row)
     except Exception as exc:

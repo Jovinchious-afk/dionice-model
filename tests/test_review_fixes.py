@@ -31,9 +31,15 @@ def held_ctx(fund, params):
     }
 
 
+def fake_claude(payload: dict) -> SimpleNamespace:
+    """Review-model calls go through the beta endpoint (server-side refusal fallback)."""
+    messages = FakeMessages(payload)
+    return SimpleNamespace(messages=messages, beta=SimpleNamespace(messages=messages))
+
+
 def test_second_pass_cannot_sell_a_healthy_holding(fund, params):
     """The reviewer turning ADD_ON_DIP into SELL on unchanged fundamentals must end as HOLD."""
-    claude = SimpleNamespace(messages=FakeMessages(model_json(action="SELL", confidence=7)))
+    claude = fake_claude(model_json(action="SELL", confidence=7))
     first = {"ticker": "TEST", "action": "ADD_ON_DIP", "confidence": 7, "model": ai_analyst.MODEL,
              "buy_zone": "< $95.00", "investment_thesis": "x"}
     prompt_kwargs = {"fundamentals": fund, "score_result": score_stock(fund, "quality_compounder"),
@@ -45,7 +51,7 @@ def test_second_pass_cannot_sell_a_healthy_holding(fund, params):
 
 def test_second_pass_sell_stands_when_business_deteriorates(fund, params):
     bad = dict(fund, revenue_growth_yoy=-0.12, op_margin_declining_3q=True)
-    claude = SimpleNamespace(messages=FakeMessages(model_json(action="SELL", confidence=7)))
+    claude = fake_claude(model_json(action="SELL", confidence=7))
     first = {"ticker": "TEST", "action": "ADD_ON_DIP", "confidence": 7, "model": ai_analyst.MODEL}
     prompt_kwargs = {"fundamentals": bad, "score_result": score_stock(bad, "quality_compounder"),
                      "congress_signal": None, "insider_signal": None, "in_portfolio": True}

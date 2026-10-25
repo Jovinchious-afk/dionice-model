@@ -33,6 +33,8 @@ say what a run will cost before starting it.
 |---|---|---|
 | newsletter, prompts, scorer, guards | `python scripts/run_weekly.py --dry-run --limit 1 --sync` | ~$0.05 |
 | batch path | `python scripts/run_weekly.py --dry-run --limit 0` | ~$0.03, minutes to an hour |
+| Thursday revisit, A/B sample, two-model batch | `python scripts/run_weekly.py --dry-run --limit 2 --revisit` | ~$0.3-0.5 |
+| monthly report | `python scripts/run_monthly.py --dry-run` | ~$0.05 |
 | learning report statistics | `python scripts/run_quarterly_review.py --dry-run --no-ai` | free |
 | learning report text | `python scripts/run_quarterly_review.py --dry-run` | ~$0.30 |
 | scoring job | `python scripts/update_prices.py --dry-run` | free |
