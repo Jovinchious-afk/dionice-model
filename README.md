@@ -3,8 +3,8 @@
 AI-powered stock analysis system for a small retail investor using Revolut Basic.
 
 **What it does:**
-- Sends a stock newsletter every **Tuesday and Thursday** (Croatian); on Thursdays it also
-  re-checks the last 60 days' buy ideas and every idea whose buy zone the price reached
+- Sends a stock newsletter every **Tuesday and Thursday** (Croatian); every other Thursday
+  it also re-checks the last 60 days' buy ideas and every idea whose buy zone the price reached
 - Sends a monthly portfolio review on the **1st of each month**
 - Sends a **quarterly learning report**: how past calls did against the S&P 500, and
   proposed lessons and parameter changes that you approve in the app
@@ -212,9 +212,11 @@ python scripts/run_quarterly_review.py --dry-run --no-ai  # learning statistics,
    when a zone is lowered while the price already sits at the old one)
 6. **Buy candidates and lowered zones get a second opinion** from a stronger model while the
    monthly budget allows
-7. **Thursdays: revisit.** Every BUY_BELOW/ADD_ON_DIP of the last 60 days and every watchlist
-   idea whose zone was reached is analysed again by the stronger model; from confidence 6
-   it is shown again with "first call → today", below 6 it is named as no longer worth buying
+7. **Every other Thursday: revisit.** Every BUY_BELOW/ADD_ON_DIP of the last 60 days and every
+   watchlist idea whose zone was reached is analysed again by the stronger model; from
+   confidence 6 it is shown again with "first call → today", below 6 it is named as no longer
+   worth buying. The cycle (`revisit_every_weeks`, 2) counts from the last revisit that ran,
+   so a failed Thursday is made up the next week; the other newsletters name the next date
 8. **Email is sent** with max 4-7 actions; "NO TRADE" is a valid primary output. Hidden gems
    get short cards, and a health line at the bottom shows the gem pool, benchmark coverage
    and the month's AI spend
@@ -243,8 +245,8 @@ choice of the routine model rests on data.
 ## Email Schedule
 
 - **Tuesday and Thursday, 13:00 UTC** — Weekly newsletter (GitHub starts scheduled jobs late,
-  and the batch adds up to an hour, so it usually arrives in the evening); Thursday's
-  includes the revisit section
+  and the batch adds up to an hour, so it usually arrives in the evening); every other
+  Thursday's includes the revisit section (first on 2026-10-29)
 - **1st of each month, 09:00 UTC** — Monthly portfolio review
 - **Wednesday 10:00 UTC** — Background decision scoring vs S&P 500 + buy-zone check for
   BUY/ADD and WATCHLIST ideas (no email); Thursday's revisit reads what it marked

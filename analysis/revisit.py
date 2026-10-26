@@ -1,6 +1,8 @@
 """
-Thursday revisit: the newsletter's own BUY ideas of the last 60 days, and the
-watchlist ideas whose buy zone the price has reached, analysed again.
+Thursday revisit, every other Thursday (revisit_every_weeks): the newsletter's own
+BUY ideas of the last 60 days, and the watchlist ideas whose buy zone the price has
+reached, analysed again. The cycle counts from the last revisit that actually ran,
+so a Thursday whose run failed is made up the following Thursday.
 
 Ideas used to be fire-and-forget: of the 14 BUY/ADD calls and reached zones from
 Aug-Oct 2026, the random universe sample had re-checked only four. A reached zone
@@ -16,13 +18,18 @@ instead of judging the value - chasing the price down, which the investor's rule
 ("the zone follows value, not price") forbids. zone_drift() flags it.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from analysis.prices import parse_buy_zone
 
 BUY_ACTIONS = {"BUY_BELOW", "ADD_ON_DIP"}
 ZONE_TOLERANCE = 1.02   # a price at most 2% above the zone counts as "at the zone"
 DRIFT_THRESHOLD = 0.95  # a new zone 5%+ below the old one, while the price is at the old one
+# A revisit is due once more than (weeks × 7 − this) days have passed since the last
+# one: GitHub starts the job at a different hour every time, so exactly 14 days is too strict
+CYCLE_SLACK_DAYS = 4
+REVISIT_WEEKDAY = 3     # Thursday, the day after update_prices marks reached buy zones
+RUN_HOUR_UTC = 13       # the newsletter's cron hour, for dating future runs
 
 
 def _ts(value) -> datetime | None:
@@ -53,6 +60,37 @@ def _evidence_price(row: dict) -> float | None:
     """The price a watchlist row was written at, from its evidence table ("$121.51")."""
     evidence = row.get("evidence_json")
     return _num(evidence.get("current_price")) if isinstance(evidence, dict) else None
+
+
+def last_revisit_at(history: dict[str, list[dict]]) -> datetime | None:
+    """When the last revisit ran: the newest logged analysis that was one (features.revisit_trigger)."""
+    latest = None
+    for rows in history.values():
+        for row in rows:
+            if ((row.get("snapshot") or {}).get("features") or {}).get("revisit_trigger"):
+                ts = _ts(row.get("analyzed_at"))
+                if ts and (latest is None or ts > latest):
+                    latest = ts
+    return latest
+
+
+def revisit_due(last: datetime | None, now: datetime, every_weeks: int) -> bool:
+    """True when the revisit cycle has come round: never ran yet, or ran more than a cycle ago."""
+    if last is None:
+        return True
+    return now - last > timedelta(days=max(int(every_weeks), 1) * 7 - CYCLE_SLACK_DAYS)
+
+
+def next_revisit_on(last: datetime | None, now: datetime, every_weeks: int) -> date | None:
+    """The Thursday after today on which the next revisit will run (for the health line)."""
+    day = now.date()
+    for _ in range(7 * 8):
+        day += timedelta(days=1)
+        if day.weekday() != REVISIT_WEEKDAY:
+            continue
+        if revisit_due(last, datetime(day.year, day.month, day.day, RUN_HOUR_UTC, tzinfo=timezone.utc), every_weeks):
+            return day
+    return None
 
 
 def _origin(symbol: str, trigger: str, ts: datetime, action, zone, confidence, thesis, price) -> dict:

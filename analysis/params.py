@@ -26,6 +26,7 @@ DEFAULTS: dict = {
     # The investor raised the ceiling on 2026-10-25 ("even $10 a month is fine");
     # measured spend was about $2.5 in October
     "monthly_budget_usd": 8.0,
+    "revisit_every_weeks": 2,  # the investor's choice on 2026-10-26: every other Thursday
     "revisit_days": 60,
     "revisit_max": 20,
     "revisit_min_confidence": 6,
@@ -46,8 +47,9 @@ DESCRIPTIONS: dict[str, str] = {
     "second_pass_min_confidence": "BUY kandidati od ovog confidencea idu na drugu provjeru jačim modelom",
     "second_pass_max_per_run": "Najviše toliko drugih provjera po newsletteru",
     "monthly_budget_usd": "Mjesečni budžet za AI (USD); iznad njega se druga provjera i A/B uzorak preskaču",
-    "revisit_days": "Četvrtkom se ponovno analiziraju BUY/ADD ideje i dosegnute zone iz zadnjih toliko dana",
-    "revisit_max": "Najviše toliko ponovnih provjera po četvrtku (dosegnute zone imaju prednost)",
+    "revisit_every_weeks": "Ponovna provjera ide svakih toliko tjedana četvrtkom (2 = svaki drugi), računajući od zadnje odrađene",
+    "revisit_days": "Ponovna provjera obuhvaća BUY/ADD ideje i dosegnute zone iz zadnjih toliko dana",
+    "revisit_max": "Najviše toliko ideja po ponovnoj provjeri (dosegnute zone imaju prednost)",
     "revisit_min_confidence": "Ponovno provjerena ideja ulazi u newsletter kao puna analiza od ovog confidencea",
     "ab_sample_per_run": "Toliko nasumičnih dionica po newsletteru analizira i jači model, samo za usporedbu u izvještaju učenja",
     "watchlist_max_age_days": "Watchlist ideja starija od ovoga, koju nitko nije ponovno analizirao, ide u EXPIRED",

@@ -1,6 +1,6 @@
 """Thursday revisit, zone drift, watchlist hygiene, refresh guards, the new email sections and the A/B statistics."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -8,7 +8,15 @@ import pytest
 from analysis import learning
 from analysis.analysis_history import load_recent_history
 from analysis.email_sender import build_html_email
-from analysis.revisit import origin_line, select_revisits, stale_watchlist_rows, zone_drift
+from analysis.revisit import (
+    last_revisit_at,
+    next_revisit_on,
+    origin_line,
+    revisit_due,
+    select_revisits,
+    stale_watchlist_rows,
+    zone_drift,
+)
 from scripts import refresh_gems, refresh_sector_benchmarks, run_weekly
 from tests.conftest import make_series
 
@@ -46,6 +54,34 @@ def test_revisit_picks_recent_buy_calls_and_reached_zones_first():
     assert picked["CENX"]["trigger"] == "buy_call" and picked["CENX"]["price_at_call"] == 39.48
     assert list(picked)[-1] == "CENX"  # reached zones come first
     assert len(select_revisits(decisions, watchlist, NOW, held=set(), max_n=2, prices=prices)) == 2
+
+
+def utc(*args):
+    return datetime(*args, tzinfo=timezone.utc)
+
+
+def test_biweekly_cycle_counts_from_the_last_revisit_that_ran():
+    first = utc(2026, 10, 29, 19, 30)  # the batch ended in the evening
+    assert revisit_due(None, utc(2026, 10, 29, 17, 50), 2)           # never ran: due
+    assert not revisit_due(first, utc(2026, 11, 5, 17, 50), 2)       # the Thursday in between
+    assert revisit_due(first, utc(2026, 11, 12, 17, 50), 2)          # two weeks later, earlier hour
+    assert revisit_due(first, utc(2026, 11, 19, 17, 50), 2)          # a failed revisit is made up
+    assert revisit_due(first, utc(2026, 11, 5, 17, 50), 1)           # back to weekly with 1
+    # The date the health line names: from a Tuesday, from the Thursday in between, before the first
+    assert next_revisit_on(first, utc(2026, 11, 3, 18), 2) == date(2026, 11, 12)
+    assert next_revisit_on(first, utc(2026, 11, 5, 18), 2) == date(2026, 11, 12)
+    assert next_revisit_on(None, utc(2026, 10, 26, 9), 2) == date(2026, 10, 29)
+
+
+def test_last_revisit_is_read_from_the_logged_analyses():
+    history = {
+        "ATI": [{"analyzed_at": "2026-10-29T19:30:00+00:00", "snapshot": {"features": {"revisit_trigger": "zone_reached"}}},
+                {"analyzed_at": "2026-10-27T18:00:00+00:00", "snapshot": {"features": {}}}],
+        "VG": [{"analyzed_at": "2026-11-03T18:00:00+00:00", "snapshot": {"features": {"in_portfolio": True}}}],
+        "OLD": [{"analyzed_at": "2026-10-20T17:00:00+00:00"}],  # decisions fallback: no snapshot
+    }
+    assert last_revisit_at(history) == utc(2026, 10, 29, 19, 30)
+    assert last_revisit_at({}) is None
 
 
 def test_origin_line_and_zone_drift():
@@ -167,7 +203,10 @@ def test_health_line_warns_about_an_empty_gem_pool():
     assert "gemova u bazenu 0 ⚠️" in line and "10/11 sektora ⚠️" in line
     assert "$2.31 od $8.00" in line and "analiza bez odgovora 1 ⚠️" in line
     ok = run_weekly.build_health_line(118, {"sectors": 11, "industries": 50, "carried_over": 0}, None, 8.0, 0, 0)
-    assert "⚠️" not in ok
+    assert "⚠️" not in ok and "ponovna provjera" not in ok
+    off_week = run_weekly.build_health_line(156, {"sectors": 11, "industries": 50, "carried_over": 0}, 3.1, 8.0,
+                                            0, 0, next_revisit=date(2026, 11, 12))
+    assert off_week.endswith("iduća ponovna provjera: četvrtak 12. 11.")
 
 
 def test_ab_sample_leaves_out_positions_gems_and_revisits():

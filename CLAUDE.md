@@ -8,13 +8,15 @@ are English. Talk to the user in Croatian.
 ## Map
 
 - `scripts/run_weekly.py` — newsletter pipeline: discovery → fundamentals → scorer → AI (one
-  Message Batch, two models) → sell guard / second pass → email → Supabase; Thursdays also
-  the revisit of the last 60 days' BUY ideas and reached zones, every run a small A/B sample
+  Message Batch, two models) → sell guard / second pass → email → Supabase; every other
+  Thursday also the revisit of the last 60 days' BUY ideas and reached zones, every run a
+  small A/B sample
 - `analysis/ai_analyst.py` — prompts, JSON schema (structured outputs), batch runner, and
   `finalize()`: every deterministic rule (hype block, confidence floor, 30% concentration
   cap, starter entry plan, zone-drift flag)
-- `analysis/revisit.py` — Thursday revisit selection, its prompt block and email line,
-  zone drift, stale-watchlist rules
+- `analysis/revisit.py` — revisit schedule (every `revisit_every_weeks` Thursdays, counted
+  from the last revisit that ran), selection, prompt block and email line, zone drift,
+  stale-watchlist rules
 - `analysis/params.py` — tunable parameters; defaults in code, overrides in `model_params`
   (only ACTIVE rows, approved on the Streamlit "Učenje" page)
 - `analysis/scorer.py` — 0-100 fundamental score, P/E vs `data/sector_benchmarks.json`
@@ -30,7 +32,7 @@ are English. Talk to the user in Croatian.
 - Tests (no network, no cost): `python -m pytest -q`
 - Newsletter dry run (no email, no DB writes; real Claude calls, ~$0.05):
   `python scripts/run_weekly.py --dry-run --limit 1 --sync`
-- Thursday revisit on any day (batch, ~$0.3-0.5): `python scripts/run_weekly.py --dry-run --limit 2 --revisit`
+- Revisit on any day, whatever the cycle (batch, ~$0.3-0.5): `python scripts/run_weekly.py --dry-run --limit 2 --revisit`
 - Learning report, statistics only (free): `python scripts/run_quarterly_review.py --dry-run --no-ai`
 - Screenshots: `python scripts/verify_screens.py --html <file>` / `--app`
 - Production runs on Python 3.11 (GitHub Actions); check new syntax against 3.11.

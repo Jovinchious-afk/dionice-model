@@ -14,10 +14,12 @@ somewhat later). BUY candidates and zones lowered while the price sat at the old
 zone are then re-checked by REVIEW_MODEL while the month's AI spend stays under the
 budget in model_params.
 
-Thursdays (the day after the Wednesday job marks reached buy zones) also revisit
-the newsletter's own ideas: every BUY_BELOW/ADD_ON_DIP call of the last 60 days and
-every watchlist idea whose zone the price reached, analysed again by REVIEW_MODEL
-in the same batch and shown in their own section from revisit_min_confidence up.
+Every other Thursday (revisit_every_weeks; the day after the Wednesday job marks
+reached buy zones) the run also revisits the newsletter's own ideas: every
+BUY_BELOW/ADD_ON_DIP call of the last 60 days and every watchlist idea whose zone the
+price reached, analysed again by REVIEW_MODEL in the same batch and shown in their
+own section from revisit_min_confidence up. The cycle counts from the last revisit
+that actually ran, so a failed Thursday is made up the following week.
 A few random stocks per run are analysed by REVIEW_MODEL as well (the A/B sample,
 never published), so the learning report can compare the two models on the same
 stocks.
@@ -26,7 +28,7 @@ Usage: python scripts/run_weekly.py [--dry-run] [--limit N] [--sync] [--revisit 
   --dry-run     no email and no database writes; the HTML goes to a temp file
   --limit N     analyse only the portfolio plus N universe candidates and one gem
   --sync        plain API calls instead of a batch (faster, full price, no A/B sample)
-  --revisit     run the Thursday revisit on any day; --no-revisit skips it on Thursday
+  --revisit     run the revisit today whatever the day or cycle; --no-revisit skips it
 """
 
 import argparse
@@ -73,7 +75,16 @@ from analysis.investor_profile import load_investor_profile
 from analysis.params import load_params
 from analysis.portfolio import compute_holdings, usd_to_eur_now
 from analysis.prices import BENCHMARK, PriceBook, latest_closes
-from analysis.revisit import origin_line, revisit_prompt_block, select_revisits, stale_watchlist_rows
+from analysis.revisit import (
+    REVISIT_WEEKDAY,
+    last_revisit_at,
+    next_revisit_on,
+    origin_line,
+    revisit_due,
+    revisit_prompt_block,
+    select_revisits,
+    stale_watchlist_rows,
+)
 from analysis.sector_context import format_context
 from analysis.sentiment_tracker import apply_market_cap, get_sentiment_batch
 from analysis.stock_discovery import gem_pool_size, select_candidates
@@ -88,7 +99,6 @@ DECISION_ACTIONS = {"BUY_BELOW", "ADD_ON_DIP", "WATCHLIST", "HOLD", "SELL", "RED
 # The watchlist tracks buy zones; HOLD/SELL/REDUCE concern positions already owned
 WATCHLIST_ACTIONS = {"BUY_BELOW", "ADD_ON_DIP", "WATCHLIST"}
 SELL_GUARD_EFFORT = "high"  # a sell call on a held position is the rarest and costliest decision
-REVISIT_WEEKDAY = 3         # Thursday: the day after update_prices marks reached buy zones
 AB_SUFFIX = "__ab"          # batch key of the A/B request for a ticker
 YAHOO_SECTORS = 11          # sectors a complete P/E benchmark file covers
 MIN_GEM_POOL = 40           # below this the health line warns (the 2026-10-01 refresh left 0)
@@ -344,8 +354,11 @@ def choose_ab_sample(jobs: dict[str, dict], revisits: dict, n: int) -> list[str]
 
 
 def build_health_line(gem_pool: int, coverage: dict, month_cost: float | None, budget: float,
-                      failed: int, dead: int) -> str:
-    """One line at the bottom of the email, so a silent failure (like the empty gem pool) is seen at once."""
+                      failed: int, dead: int, next_revisit=None) -> str:
+    """
+    One line at the bottom of the email, so a silent failure (like the empty gem pool)
+    is seen at once; in a newsletter without the revisit it also says when the next one runs.
+    """
     bench = f"P/E benchmark {coverage['sectors']}/{YAHOO_SECTORS} sektora"
     if coverage.get("carried_over"):
         bench += f" ({coverage['carried_over']} grupa iz prošlog kvartala)"
@@ -355,6 +368,7 @@ def build_health_line(gem_pool: int, coverage: dict, month_cost: float | None, b
         f"AI ovaj mjesec ${month_cost:.2f} od ${budget:.2f}" if month_cost is not None else None,
         f"analiza bez odgovora {failed}" + (" ⚠️" if failed else ""),
         f"isključenih mrtvih tickera {dead}" if dead else None,
+        f"iduća ponovna provjera: četvrtak {next_revisit.day}. {next_revisit.month}." if next_revisit else None,
     ]
     return "Zdravlje sustava: " + " · ".join(p for p in parts if p)
 
@@ -509,10 +523,8 @@ def main(dry_run: bool = False, limit: int | None = None, sync: bool = False, re
     today = datetime.now(timezone.utc)
     date_str = today.strftime("%Y-%m-%d")
     day_name = today.strftime("%A")
-    revisit_day = today.weekday() == REVISIT_WEEKDAY if revisit is None else revisit
     print(f"[run_weekly] Starting analysis for {date_str} ({day_name})"
-          f"{' — DRY RUN' if dry_run else ''}{' — sync calls' if sync else ' — batch'}"
-          f"{' — Thursday revisit' if revisit_day else ''}")
+          f"{' — DRY RUN' if dry_run else ''}{' — sync calls' if sync else ' — batch'}")
 
     db_client = get_supabase()
     write_client = None if dry_run else db_client
@@ -550,7 +562,19 @@ def main(dry_run: bool = False, limit: int | None = None, sync: bool = False, re
         if dead_tickers:
             print(f"[run_weekly] {len(dead_tickers)} tickers retired as dead, excluded from sampling")
 
-    # 1a. Thursday revisit: the newsletter's own BUY ideas and the reached zones of the last weeks
+    # 1a. Thursday revisit, every revisit_every_weeks Thursdays counted from the last one
+    # that ran (--revisit / --no-revisit override): the newsletter's own BUY ideas and
+    # the reached zones of the last weeks
+    last_revisit = last_revisit_at(history)
+    if revisit is None:
+        revisit_day = (today.weekday() == REVISIT_WEEKDAY
+                       and revisit_due(last_revisit, today, params["revisit_every_weeks"]))
+        if today.weekday() == REVISIT_WEEKDAY and not revisit_day:
+            print(f"[run_weekly] Thursday revisit not due: last one ran {last_revisit:%Y-%m-%d}, "
+                  f"every {params['revisit_every_weeks']} weeks")
+    else:
+        revisit_day = revisit
+    next_revisit = None if revisit_day else next_revisit_on(last_revisit, today, params["revisit_every_weeks"])
     revisit_origins: dict[str, dict] = {}
     if revisit_day and db_client:
         decisions_rows, watchlist_rows = load_revisit_sources(db_client, params["revisit_days"])
@@ -1004,6 +1028,7 @@ def main(dry_run: bool = False, limit: int | None = None, sync: bool = False, re
         gem_pool_size(), benchmark_coverage(),
         (month_before + usage.cost) if month_before is not None else None, params["monthly_budget_usd"],
         failed=sum(1 for r in recommendations if r.get("error")), dead=len(dead_tickers),
+        next_revisit=next_revisit if db_client else None,
     )
     print(f"[run_weekly] {health_line}")
 
@@ -1061,8 +1086,8 @@ if __name__ == "__main__":
     parser.add_argument("--sync", action="store_true", help="plain API calls instead of a Message Batch")
     revisit_flag = parser.add_mutually_exclusive_group()
     revisit_flag.add_argument("--revisit", dest="revisit", action="store_true", default=None,
-                              help="run the Thursday revisit today")
+                              help="run the revisit today, whatever the day or the cycle")
     revisit_flag.add_argument("--no-revisit", dest="revisit", action="store_false",
-                              help="skip the revisit even on Thursday")
+                              help="skip the revisit even when it is due")
     args = parser.parse_args()
     main(dry_run=args.dry_run, limit=args.limit, sync=args.sync, revisit=args.revisit)
